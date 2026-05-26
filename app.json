@@ -26,6 +26,9 @@
     "web": {
       "favicon": "./assets/favicon.png",
       "baseUrl": "/mandruva-invest"
+    },
+    "experiments": {
+      "baseUrl": "/mandruva-invest"
     }
   }
 }
