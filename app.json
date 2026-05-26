@@ -24,8 +24,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png",
-      "baseUrl": "/mandruva-invest"
+      "favicon": "./assets/favicon.png"
     },
     "experiments": {
       "baseUrl": "/mandruva-invest"
