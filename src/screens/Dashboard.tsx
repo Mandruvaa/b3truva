@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -78,6 +78,7 @@ const C = {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = '@mandruva_invest_assets';
 const MONTHS_PT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const AI_PHRASES = ['Acessando dados de mercado...','Avaliando notícias recentes...','Calculando tendências...','Cruzando indicadores técnicos...'];
 const ASSET_EXAMPLES = {
   fiat:   { BRL: { ticker:'PETR4', name:'Petrobras' }, USD: { ticker:'TSLA34', name:'Tesla' } },
   crypto: { BRL: { ticker:'BTC',   name:'Bitcoin'   }, USD: { ticker:'ETH',   name:'Ethereum' } },
@@ -1275,7 +1276,7 @@ function Sidebar({
 }
 
 // ─── NewsCard ─────────────────────────────────────────────────────────────────
-function NewsCard({ item }: { item: NewsItem }) {
+const NewsCard = React.memo(function NewsCard({ item }: { item: NewsItem }) {
   return (
     <View style={s.newsCard}>
       <View style={[s.newsImgArea, { backgroundColor: item.bgColor }]}>
@@ -1290,10 +1291,10 @@ function NewsCard({ item }: { item: NewsItem }) {
       </View>
     </View>
   );
-}
+});
 
 // ─── AssetTableRow ────────────────────────────────────────────────────────────
-function AssetTableRow({
+const AssetTableRow = React.memo(function AssetTableRow({
   asset, currentPrice, loadingPrice,
   cryptoChange, loadingCrypto,
   b3Change, loadingB3,
@@ -1373,174 +1374,76 @@ function AssetTableRow({
       </View>
     </View>
   );
+});
+
+// ─── AssetFormModal ───────────────────────────────────────────────────────────
+// Formulário de adicionar/editar ativo com estado 100% local (campos, máscaras,
+// sugestões e calendário): digitar aqui não re-renderiza o Dashboard.
+// Comunicação com o pai apenas via isOpen / onClose / onSave(payload).
+interface AssetFormPayload {
+  name: string; symbol: string;
+  category: Category; currency: Currency; market: Market;
+  quantity: number; purchasePrice: number; date: string;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
-export default function Dashboard() {
-  const { width } = useWindowDimensions();
-  const showSidebar = width >= 640;
-  const showNews    = width >= 1040;
+const EMPTY_FORM = {
+  name:'', symbol:'', quantity:'', purchasePrice:'',
+  category:'crypto' as Category, currency:'USD' as Currency,
+  market:'estrangeiro' as Market, date:'',
+};
 
-  // ── View state ──
-  const [activeView,   setActiveView]   = useState<ActiveView>('dashboard');
-  const [presetFields,     setPresetFields]     = useState<PresetFields | null>(null);
-  const [presetCategoryId, setPresetCategoryId] = useState<string | null>(null);
-
-  // ── Asset state ──
-  const [assets,         setAssets]         = useState<Asset[]>([]);
-  const [currentPrices,  setCurrentPrices]  = useState<PriceMap>({});
-  const [loadingPrices,  setLoadingPrices]  = useState(false);
-  const [dollarRate,       setDollarRate]       = useState(DOLLAR_RATE_FALLBACK);
-  const [dollarOnline,     setDollarOnline]     = useState(true);
-  const [displayCurrency,  setDisplayCurrency]  = useState<Currency>('BRL');
-  const [cryptoPrices,     setCryptoPrices]     = useState<CryptoPriceMap>({});
-  const [loadingCrypto,    setLoadingCrypto]    = useState(false);
-  const [b3Prices,         setB3Prices]         = useState<BrazilianStockMap>({});
-  const [loadingB3,        setLoadingB3]        = useState(false);
-
-  // ── Filter/sort state ──
-  const [filterVisible, setFilterVisible] = useState(false);
-  const [sortBy,        setSortBy]        = useState<SortBy>('data');
-  const [sortAsc,       setSortAsc]       = useState(false);
-  const [filters,       setFilters]       = useState({ search:'', market:'' as Market|'' });
-
-  // ── Form state ──
-  const [modalVisible,  setModalVisible]  = useState(false);
-  const [editingAsset,  setEditingAsset]  = useState<Asset | null>(null);
-  const [formData,      setFormData]      = useState({
-    name:'', symbol:'', quantity:'', purchasePrice:'',
-    category:'crypto' as Category, currency:'USD' as Currency,
-    market:'estrangeiro' as Market, date:'',
-  });
+function AssetFormModal({
+  isOpen, editingAsset, initialPreset, initialPresetCategoryId, dollarRate, onClose, onSave,
+}: {
+  isOpen: boolean;
+  editingAsset: Asset | null;
+  initialPreset: PresetFields | null;
+  initialPresetCategoryId: string | null;
+  dollarRate: number;
+  onClose: () => void;
+  onSave: (data: AssetFormPayload) => void;
+}) {
+  // ── Form state (local) ──
+  const [formData,      setFormData]      = useState(EMPTY_FORM);
   const [suggestions,   setSuggestions]   = useState<KnownAsset[]>([]);
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [isTypingPrice, setIsTypingPrice] = useState(false);
   const [focusedField,  setFocusedField]  = useState<string | null>(null);
+  const [presetFields,     setPresetFields]     = useState<PresetFields | null>(null);
+  const [presetCategoryId, setPresetCategoryId] = useState<string | null>(null);
 
-  // ── Calendar state ──
+  // ── Calendar state (local) ──
   const [calendarVisible,  setCalendarVisible]  = useState(false);
   const [monthYearVisible, setMonthYearVisible] = useState(false);
   const [calendarMonth,    setCalendarMonth]    = useState(getLocalDateString());
   const [pickerYear,       setPickerYear]       = useState(new Date().getFullYear());
   const [pickerMonth,      setPickerMonth]      = useState(new Date().getMonth());
 
-  // ── Settings state ──
-  const [settingsVisible, setSettingsVisible] = useState(false);
-
-  // ── AI state ──
-  const [analysisVisible, setAnalysisVisible] = useState(false);
-  const [analysisAsset,   setAnalysisAsset]   = useState<Asset | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisResult,  setAnalysisResult]  = useState<AIAnalysis | null>(null);
-  const [analysisPhrase,  setAnalysisPhrase]  = useState('');
-
-  useEffect(() => { loadAssets(); }, []);
+  // Reinicializa o formulário a cada abertura (novo com preset ou edição)
   useEffect(() => {
-    fetchDollarRate().then(({ rate, online }: DollarRateResult) => {
-      setDollarRate(rate);
-      setDollarOnline(online);
-    });
-  }, []);
-
-  // ── Data ──
-  // Pipeline unificado: uma requisição por provedor (BrAPI/Yahoo/CoinGecko)
-  // alimenta preços, variação cripto 24h e variação diária B3 numa só passada.
-  const fetchPricesForAssets = async (list: Asset[]) => {
-    if (!list.length) return;
-    setLoadingPrices(true); setLoadingCrypto(true); setLoadingB3(true);
-    try {
-      const { prices, crypto, b3 } = await fetchPortfolioPrices(list);
-      setCurrentPrices(prices);
-      setCryptoPrices(crypto);
-      setB3Prices(b3);
-    } catch {}
-    finally { setLoadingPrices(false); setLoadingCrypto(false); setLoadingB3(false); }
-  };
-  const loadAssets = async () => {
-    try {
-      const d = await AsyncStorage.getItem(STORAGE_KEY);
-      if (d) { const p: Asset[] = JSON.parse(d); setAssets(p); fetchPricesForAssets(p); }
-    } catch (e) { console.error(e); }
-  };
-  const saveAssets = async (next: Asset[]) => {
-    setAssets(next); fetchPricesForAssets(next);
-    try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) { console.error(e); }
-  };
-
-  // ── Form logic ──
-  const resetForm = () => {
-    setFormData({ name:'', symbol:'', quantity:'', purchasePrice:'',
-      category:'crypto', currency:'USD', market:'estrangeiro', date:'' });
-    setEditingAsset(null); setPresetFields(null); setPresetCategoryId(null);
-    setSuggestions([]); setFetchingPrice(false); setIsTypingPrice(false);
-  };
-
-  const handleSelectCategory = (preset: PresetFields, categoryId?: string) => {
-    setFormData({ name:'', symbol:'', quantity:'', purchasePrice:'',
-      category: preset.category, currency: preset.currency,
-      market: preset.market, date:'' });
-    setEditingAsset(null); setPresetFields(preset); setPresetCategoryId(categoryId ?? null);
-    setSuggestions([]); setFetchingPrice(false); setIsTypingPrice(false);
-    // Não troca de view aqui — o modal abre sobre a tela atual.
-    // Cancelar retorna automaticamente à mesma tela.
-    setModalVisible(true);
-  };
-
-  const handleEdit = (asset: Asset) => {
-    setEditingAsset(asset);
-    setPresetFields(null); setPresetCategoryId(null);
-    setFormData({ name:asset.name, symbol:asset.symbol, quantity:asset.quantity.toString(),
-      purchasePrice:asset.purchasePrice.toString(), category:asset.category,
-      currency:asset.currency, market:asset.market, date:asset.date });
-    setModalVisible(true);
-  };
-  const handleDelete = (id: string) => saveAssets(assets.filter(a => a.id !== id));
-
-  const handleAddAsset = () => {
-    const missing: string[] = [];
-    if (!formData.symbol)        missing.push('Código (Ticker)');
-    if (!formData.name)          missing.push('Nome do Ativo');
-    if (!formData.quantity)      missing.push('Quantidade');
-    if (!formData.purchasePrice) missing.push('Preço de Compra');
-    if (!formData.date)          missing.push('Data de Obtenção');
-    if (missing.length) {
-      const msg = `Campos obrigatórios:\n• ${missing.join('\n• ')}`;
-      Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Campos obrigatórios', msg);
-      return;
-    }
+    if (!isOpen) return;
     if (editingAsset) {
-      saveAssets(assets.map(a => a.id === editingAsset.id
-        ? { ...editingAsset,
-            quantity:      parseFloat(formData.quantity.replace(/,/g,'.')),
-            purchasePrice: parseFloat(formData.purchasePrice.replace(/,/g,'.')),
-            date:          formData.date }
-        : a));
-      setEditingAsset(null);
+      setFormData({
+        name: editingAsset.name, symbol: editingAsset.symbol,
+        quantity:      editingAsset.quantity.toString(),
+        purchasePrice: editingAsset.purchasePrice.toString(),
+        category: editingAsset.category, currency: editingAsset.currency,
+        market: editingAsset.market, date: editingAsset.date,
+      });
     } else {
-      const sym   = formData.symbol.toUpperCase();
-      const qty   = parseFloat(formData.quantity.replace(/,/g,'.'));
-      const price = parseFloat(formData.purchasePrice.replace(/,/g,'.'));
-      const existing = assets.find(a => a.symbol === sym);
-      if (existing) {
-        const totalQty = existing.quantity + qty;
-        const avgPrice = (existing.quantity * existing.purchasePrice + qty * price) / totalQty;
-        saveAssets(assets.map(a => a.id === existing.id
-          ? { ...a, quantity: totalQty, purchasePrice: avgPrice }
-          : a));
-      } else {
-        saveAssets([...assets, {
-          id: Date.now().toString(), name:formData.name,
-          symbol: sym, category:formData.category,
-          currency:formData.currency, market:formData.market,
-          quantity: qty, purchasePrice: price, date:formData.date,
-        }]);
-      }
+      setFormData({ ...EMPTY_FORM,
+        category: initialPreset?.category ?? EMPTY_FORM.category,
+        currency: initialPreset?.currency ?? EMPTY_FORM.currency,
+        market:   initialPreset?.market   ?? EMPTY_FORM.market,
+      });
     }
-    resetForm(); setModalVisible(false); setActiveView('dashboard');
-  };
+    setPresetFields(initialPreset);
+    setPresetCategoryId(initialPresetCategoryId);
+    setSuggestions([]); setFetchingPrice(false); setIsTypingPrice(false);
+    setFocusedField(null); setCalendarVisible(false); setMonthYearVisible(false);
+  }, [isOpen, editingAsset, initialPreset, initialPresetCategoryId]);
 
+  // ── Handlers (locais) ──
   const handleCurrencyChange = (cur: Currency) => {
     if (formData.currency === cur) return;
     const pv = parseFloat(formData.purchasePrice.replace(/,/g,'.'));
@@ -1584,9 +1487,433 @@ export default function Dashboard() {
     finally { setFetchingPrice(false); }
   };
 
+  const handleSubmit = () => {
+    const missing: string[] = [];
+    if (!formData.symbol)        missing.push('Código (Ticker)');
+    if (!formData.name)          missing.push('Nome do Ativo');
+    if (!formData.quantity)      missing.push('Quantidade');
+    if (!formData.purchasePrice) missing.push('Preço de Compra');
+    if (!formData.date)          missing.push('Data de Obtenção');
+    if (missing.length) {
+      const msg = `Campos obrigatórios:\n• ${missing.join('\n• ')}`;
+      Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Campos obrigatórios', msg);
+      return;
+    }
+    onSave({
+      name:     formData.name,
+      symbol:   formData.symbol.toUpperCase(),
+      category: formData.category,
+      currency: formData.currency,
+      market:   formData.market,
+      quantity:      parseFloat(formData.quantity.replace(/,/g,'.')),
+      purchasePrice: parseFloat(formData.purchasePrice.replace(/,/g,'.')),
+      date:     formData.date,
+    });
+  };
+
+  // ── Derived ──
+  const isEditing     = editingAsset !== null;
+  const todayStr      = getLocalDateString();
+  const isTodayActive = formData.date === todayStr;
+  const example       = getAssetExample(formData.category, formData.currency);
+  const currSymbol    = formData.currency==='USD' ? '$' : 'R$';
+  const presetInfo    = presetCategoryId
+    ? (VT_CATEGORIES.find(c => c.id === presetCategoryId) ?? null)
+    : null;
+
+  return (
+    <Modal animationType="slide" transparent visible={isOpen} onRequestClose={onClose}>
+      <View style={s.modalOverlay}>
+        <View style={s.formModal}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <Text style={s.formTitle}>{isEditing ? 'Editar Ativo' : 'Novo Ativo'}</Text>
+
+            {/* Preset badge + seletor de categoria */}
+            {presetInfo && !isEditing && (
+              <>
+                <View style={[s.presetBadge, { borderColor: presetInfo.accentBorder, backgroundColor: presetInfo.accentDim }]}>
+                  <Text style={s.presetBadgeIcon}>{presetInfo.icon}</Text>
+                  <View style={{ flex:1 }}>
+                    <Text style={[s.presetBadgeTitle, { color: presetInfo.accent }]}>{presetInfo.title}</Text>
+                    <Text style={s.presetBadgeLabel}>{presetInfo.exchange} · categoria pré-selecionada</Text>
+                  </View>
+                </View>
+                {/* Trocar categoria */}
+                <Text style={s.presetSwitchLabel}>Trocar categoria</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={s.presetSwitchRow}>
+                  {VT_CATEGORIES.map(cat => {
+                    const isActive = presetCategoryId === cat.id;
+                    return (
+                      <TouchableOpacity
+                        key={cat.id}
+                        style={[s.presetSwitchTab, isActive && s.presetSwitchTabActive]}
+                        onPress={() => {
+                          setPresetCategoryId(cat.id);
+                          setPresetFields(cat.preset);
+                          setFormData(p => ({ ...p,
+                            category: cat.preset.category,
+                            currency: cat.preset.currency,
+                            market:   cat.preset.market,
+                          }));
+                        }}
+                      >
+                        <Text style={s.presetSwitchIcon}>{cat.icon}</Text>
+                        <Text style={[s.presetSwitchText, isActive && s.presetSwitchTextActive]}>
+                          {cat.title}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            )}
+
+            <Text style={s.formLabel}>Código (Ticker)</Text>
+            <TextInput
+              style={[s.formInput, isEditing ? s.formInputDisabled : focusedField==='symbol' && s.formInputFocused]}
+              placeholder={`Ex: ${example.ticker}`} placeholderTextColor={C.TEXT_MUTED}
+              value={formData.symbol}
+              onChangeText={t=>!isEditing&&handleTickerChange(t)}
+              onFocus={()=>setFocusedField('symbol')} onBlur={()=>setFocusedField(null)}
+              editable={!isEditing} autoCapitalize="characters" autoCorrect={false}
+            />
+            {!isEditing && suggestions.length>0 && (
+              <View style={s.suggestBox}>
+                {suggestions.map((a,i)=>(
+                  <TouchableOpacity key={a.symbol}
+                    style={[s.suggestItem,i===suggestions.length-1&&{borderBottomWidth:0}]}
+                    onPress={()=>handleSelectSuggestion(a)}>
+                    <View>
+                      <Text style={s.suggestSymbol}>{a.symbol}</Text>
+                      <Text style={s.suggestName}>{a.name}</Text>
+                    </View>
+                    <View style={{alignItems:'flex-end'}}>
+                      <Text style={s.suggestTag}>
+                        {a.category==='crypto'?'₿ Cripto':a.market==='nacional'?'🇧🇷 B3':'🌎 Nasdaq'}
+                      </Text>
+                      <Text style={s.suggestCur}>{a.currency}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            <Text style={s.formLabel}>Nome do Ativo</Text>
+            <TextInput
+              style={[s.formInput, isEditing ? s.formInputDisabled : focusedField==='name' && s.formInputFocused]}
+              placeholder="Ex: Bitcoin" placeholderTextColor={C.TEXT_MUTED}
+              value={formData.name}
+              onChangeText={t=>!isEditing&&setFormData(p=>({...p,name:t}))}
+              onFocus={()=>setFocusedField('name')} onBlur={()=>setFocusedField(null)}
+              editable={!isEditing}
+            />
+
+            <Text style={s.formLabel}>Quantidade</Text>
+            <TextInput style={[s.formInput, focusedField==='qty' && s.formInputFocused]}
+              placeholder="Ex: 0,254"
+              placeholderTextColor={C.TEXT_MUTED} keyboardType="decimal-pad"
+              value={formData.quantity.replace('.',',')}
+              onFocus={()=>setFocusedField('qty')} onBlur={()=>setFocusedField(null)}
+              onChangeText={t=>setFormData(p=>({...p,quantity:t.replace(/,/g,'.')}))}
+            />
+
+            <View style={s.formLabelRow}>
+              <Text style={[s.formLabel,{marginTop:0,marginBottom:0}]}>Preço de Compra ({currSymbol})</Text>
+              {fetchingPrice && <Text style={s.fetchingHint}>Buscando cotação...</Text>}
+            </View>
+            <TextInput
+              style={[s.formInput, fetchingPrice ? s.formInputFetching : focusedField==='price' && s.formInputFocused]}
+              placeholder={fetchingPrice?'Aguardando API...':`Ex: ${formData.currency==='USD'?'100,00':'500,00'}`}
+              placeholderTextColor={fetchingPrice?C.ORANGE:C.TEXT_MUTED}
+              keyboardType="decimal-pad"
+              value={isTypingPrice ? formData.purchasePrice.replace('.',',') : formatMoneyDisplay(formData.purchasePrice)}
+              onFocus={()=>{ setIsTypingPrice(true); setFocusedField('price'); }}
+              onBlur={()=>{ setIsTypingPrice(false); setFocusedField(null); }}
+              onChangeText={t=>setFormData(p=>({...p,purchasePrice:t.replace(/\./g,'').replace(',','.')}))}
+            />
+
+            <Text style={s.formLabel}>Data de Obtenção</Text>
+            <View style={s.dateRow}>
+              <TouchableOpacity style={s.dateInput} activeOpacity={0.7}
+                onPress={()=>{ setCalendarMonth(formData.date||getLocalDateString()); setCalendarVisible(true); }}>
+                <TextInput style={s.dateInputText} placeholder="DD/MM/AAAA"
+                  placeholderTextColor={C.TEXT_MUTED}
+                  value={formData.date ? formatDate(formData.date) : ''}
+                  onChangeText={t=>{
+                    if (t==='') { setFormData(p=>({...p,date:''})); return; }
+                    if (t.length===10&&t[2]==='/'&&t[5]==='/') {
+                      const [d,m,y]=t.split('/');
+                      setFormData(p=>({...p,date:`${y}-${m}-${d}`}));
+                    }
+                  }} editable />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.todayBtn, isTodayActive&&s.todayBtnActive]}
+                onPress={()=>{
+                  if (isTodayActive) setFormData(p=>({...p,date:''}));
+                  else { setFormData(p=>({...p,date:todayStr})); setCalendarVisible(false); }
+                }}>
+                <Text style={[s.todayBtnText, isTodayActive&&s.todayBtnTextActive]}>
+                  {isTodayActive ? '✓ Hoje' : 'Hoje'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Calendar */}
+            {calendarVisible && (
+              <Modal animationType="fade" transparent visible onRequestClose={()=>setCalendarVisible(false)}>
+                <View style={s.calendarOverlay}>
+                  <View style={s.calendarBox}>
+                    <View style={s.calendarBoxHeader}>
+                      <Text style={s.calendarBoxTitle}>Selecionar Data</Text>
+                      <TouchableOpacity onPress={()=>setCalendarVisible(false)}>
+                        <Text style={s.calendarCloseX}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Calendar current={calendarMonth} maxDate={getLocalDateString()}
+                      onMonthChange={m=>setCalendarMonth(m.dateString)}
+                      renderHeader={date=>{
+                        const d=new Date(date.toString());const mi=d.getMonth();const yr=d.getFullYear();
+                        return (
+                          <TouchableOpacity onPress={()=>{ setPickerYear(yr);setPickerMonth(mi);setMonthYearVisible(true); }}
+                            style={{paddingVertical:8,paddingHorizontal:16}}>
+                            <Text style={{color:C.TEXT,fontSize:16,fontWeight:'700'}}>{MONTHS_PT[mi]} {yr} ▾</Text>
+                          </TouchableOpacity>
+                        );
+                      }}
+                      onDayPress={day=>{ setFormData(p=>({...p,date:day.dateString})); setCalendarVisible(false); }}
+                      markedDates={{[formData.date]:{selected:true,selectedColor:C.ORANGE}}}
+                      theme={{ backgroundColor:C.CARD, calendarBackground:C.CARD, textSectionTitleColor:C.TEXT_SUB,
+                        textSectionTitleDisabledColor:C.TEXT_MUTED, selectedDayBackgroundColor:C.ORANGE,
+                        selectedDayTextColor:'#fff', todayTextColor:C.ORANGE, dayTextColor:C.TEXT,
+                        textDisabledColor:C.TEXT_MUTED, arrowColor:C.ORANGE, monthTextColor:C.TEXT, indicatorColor:C.ORANGE }}
+                    />
+                    <TouchableOpacity style={s.calendarCloseBtn} onPress={()=>setCalendarVisible(false)}>
+                      <Text style={s.calendarCloseBtnText}>Fechar</Text>
+                    </TouchableOpacity>
+                    {monthYearVisible && (
+                      <Modal animationType="fade" transparent visible onRequestClose={()=>setMonthYearVisible(false)}>
+                        <View style={s.calendarOverlay}>
+                          <View style={s.calendarBox}>
+                            <View style={s.calendarBoxHeader}>
+                              <Text style={s.calendarBoxTitle}>Mês / Ano</Text>
+                              <TouchableOpacity onPress={()=>setMonthYearVisible(false)}>
+                                <Text style={s.calendarCloseX}>✕</Text>
+                              </TouchableOpacity>
+                            </View>
+                            <View style={s.yearPickerRow}>
+                              <TouchableOpacity onPress={()=>setPickerYear(y=>y-1)} style={s.yearArrowBtn}>
+                                <Text style={s.yearArrowText}>‹</Text>
+                              </TouchableOpacity>
+                              <Text style={s.yearText}>{pickerYear}</Text>
+                              <TouchableOpacity onPress={()=>{ if(pickerYear<new Date().getFullYear())setPickerYear(y=>y+1); }} style={s.yearArrowBtn}>
+                                <Text style={[s.yearArrowText, pickerYear>=new Date().getFullYear()&&{color:C.TEXT_MUTED}]}>›</Text>
+                              </TouchableOpacity>
+                            </View>
+                            <View style={s.monthGrid}>
+                              {MONTHS_PT.map((m,i)=>{
+                                const now=new Date();
+                                const fut=pickerYear>now.getFullYear()||(pickerYear===now.getFullYear()&&i>now.getMonth());
+                                const sel=i===pickerMonth;
+                                return (
+                                  <TouchableOpacity key={i} disabled={fut}
+                                    style={[s.monthGridBtn,sel&&s.monthGridBtnActive,fut&&{opacity:0.25}]}
+                                    onPress={()=>{ setCalendarMonth(`${pickerYear}-${String(i+1).padStart(2,'0')}-01`); setPickerMonth(i); setMonthYearVisible(false); }}>
+                                    <Text style={[s.monthGridText,sel&&s.monthGridTextActive]}>{m}</Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                            <TouchableOpacity style={s.calendarCloseBtn} onPress={()=>setMonthYearVisible(false)}>
+                              <Text style={s.calendarCloseBtnText}>Fechar</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </Modal>
+                    )}
+                  </View>
+                </View>
+              </Modal>
+            )}
+
+            {/* Category / Currency / Market — hidden when preset is active */}
+            {!isEditing && !presetFields && (
+              <>
+                <Text style={s.formLabel}>Categoria</Text>
+                <View style={s.toggleRow}>
+                  {(['crypto','fiat'] as Category[]).map(cat=>(
+                    <TouchableOpacity key={cat}
+                      style={[s.toggleBtn, formData.category===cat&&s.toggleBtnActive]}
+                      onPress={()=>setFormData(p=>({...p,category:cat}))}>
+                      <Text style={[s.toggleBtnText, formData.category===cat&&s.toggleBtnTextActive]}>
+                        {cat==='crypto'?'Cripto':'Fiat'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={s.formLabel}>Moeda de Origem</Text>
+                <View style={{ marginBottom: 2 }}>
+                  <CurrencyToggle value={formData.currency} onChange={handleCurrencyChange} />
+                </View>
+                {formData.category==='fiat' && (
+                  <>
+                    <Text style={s.formLabel}>Mercado</Text>
+                    <View style={s.toggleRow}>
+                      {(['nacional','estrangeiro'] as Market[]).map(mkt=>(
+                        <TouchableOpacity key={mkt}
+                          style={[s.toggleBtn, formData.market===mkt&&s.toggleBtnActive]}
+                          onPress={()=>setFormData(p=>({...p,market:mkt}))}>
+                          <Text style={[s.toggleBtnText, formData.market===mkt&&s.toggleBtnTextActive]}>
+                            {mkt==='nacional'?'🇧🇷 Ibovespa':'🌎 Nasdaq'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </>
+            )}
+
+            <View style={s.formBtnRow}>
+              <TouchableOpacity style={s.cancelBtn} onPress={onClose}>
+                <Text style={s.cancelBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.saveBtn} onPress={handleSubmit}>
+                <Text style={s.saveBtnText}>{isEditing ? 'Atualizar' : 'Salvar'}</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function Dashboard() {
+  const { width } = useWindowDimensions();
+  const showSidebar = width >= 640;
+  const showNews    = width >= 1040;
+
+  // ── View state ──
+  const [activeView,   setActiveView]   = useState<ActiveView>('dashboard');
+  const [presetFields,     setPresetFields]     = useState<PresetFields | null>(null);
+  const [presetCategoryId, setPresetCategoryId] = useState<string | null>(null);
+
+  // ── Asset state ──
+  const [assets,         setAssets]         = useState<Asset[]>([]);
+  const [currentPrices,  setCurrentPrices]  = useState<PriceMap>({});
+  const [loadingPrices,  setLoadingPrices]  = useState(false);
+  const [dollarRate,       setDollarRate]       = useState(DOLLAR_RATE_FALLBACK);
+  const [dollarOnline,     setDollarOnline]     = useState(true);
+  const [displayCurrency,  setDisplayCurrency]  = useState<Currency>('BRL');
+  const [cryptoPrices,     setCryptoPrices]     = useState<CryptoPriceMap>({});
+  const [loadingCrypto,    setLoadingCrypto]    = useState(false);
+  const [b3Prices,         setB3Prices]         = useState<BrazilianStockMap>({});
+  const [loadingB3,        setLoadingB3]        = useState(false);
+
+  // ── Filter/sort state ──
+  const [filterVisible, setFilterVisible] = useState(false);
+  const [sortBy,        setSortBy]        = useState<SortBy>('data');
+  const [sortAsc,       setSortAsc]       = useState(false);
+  const [filters,       setFilters]       = useState({ search:'', market:'' as Market|'' });
+
+  // ── Form state (o conteúdo do formulário vive dentro do AssetFormModal) ──
+  const [modalVisible,  setModalVisible]  = useState(false);
+  const [editingAsset,  setEditingAsset]  = useState<Asset | null>(null);
+
+  // ── Settings state ──
+  const [settingsVisible, setSettingsVisible] = useState(false);
+
+  // ── AI state ──
+  const [analysisVisible, setAnalysisVisible] = useState(false);
+  const [analysisAsset,   setAnalysisAsset]   = useState<Asset | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisResult,  setAnalysisResult]  = useState<AIAnalysis | null>(null);
+  const [analysisPhrase,  setAnalysisPhrase]  = useState('');
+
+  useEffect(() => { loadAssets(); }, []);
+  useEffect(() => {
+    fetchDollarRate().then(({ rate, online }: DollarRateResult) => {
+      setDollarRate(rate);
+      setDollarOnline(online);
+    });
+  }, []);
+
+  // ── Data ──
+  // Pipeline unificado: uma requisição por provedor (BrAPI/Yahoo/CoinGecko)
+  // alimenta preços, variação cripto 24h e variação diária B3 numa só passada.
+  const fetchPricesForAssets = useCallback(async (list: Asset[]) => {
+    if (!list.length) return;
+    setLoadingPrices(true); setLoadingCrypto(true); setLoadingB3(true);
+    try {
+      const { prices, crypto, b3 } = await fetchPortfolioPrices(list);
+      setCurrentPrices(prices);
+      setCryptoPrices(crypto);
+      setB3Prices(b3);
+    } catch {}
+    finally { setLoadingPrices(false); setLoadingCrypto(false); setLoadingB3(false); }
+  }, []);
+  const loadAssets = useCallback(async () => {
+    try {
+      const d = await AsyncStorage.getItem(STORAGE_KEY);
+      if (d) { const p: Asset[] = JSON.parse(d); setAssets(p); fetchPricesForAssets(p); }
+    } catch (e) { console.error(e); }
+  }, [fetchPricesForAssets]);
+  const saveAssets = useCallback(async (next: Asset[]) => {
+    setAssets(next); fetchPricesForAssets(next);
+    try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (e) { console.error(e); }
+  }, [fetchPricesForAssets]);
+
+  // ── Form logic (o estado interno do formulário vive no AssetFormModal) ──
+  const closeForm = useCallback(() => {
+    setModalVisible(false);
+    setEditingAsset(null); setPresetFields(null); setPresetCategoryId(null);
+  }, []);
+
+  const handleSelectCategory = useCallback((preset: PresetFields, categoryId?: string) => {
+    setEditingAsset(null); setPresetFields(preset); setPresetCategoryId(categoryId ?? null);
+    // Não troca de view aqui — o modal abre sobre a tela atual.
+    // Cancelar retorna automaticamente à mesma tela.
+    setModalVisible(true);
+  }, []);
+
+  const handleEdit = useCallback((asset: Asset) => {
+    setEditingAsset(asset);
+    setPresetFields(null); setPresetCategoryId(null);
+    setModalVisible(true);
+  }, []);
+  const handleDelete = useCallback((id: string) =>
+    saveAssets(assets.filter(a => a.id !== id)), [assets, saveAssets]);
+
+  const handleSaveAsset = useCallback((data: AssetFormPayload) => {
+    if (editingAsset) {
+      saveAssets(assets.map(a => a.id === editingAsset.id
+        ? { ...editingAsset,
+            quantity:      data.quantity,
+            purchasePrice: data.purchasePrice,
+            date:          data.date }
+        : a));
+    } else {
+      const existing = assets.find(a => a.symbol === data.symbol);
+      if (existing) {
+        const totalQty = existing.quantity + data.quantity;
+        const avgPrice = (existing.quantity * existing.purchasePrice + data.quantity * data.purchasePrice) / totalQty;
+        saveAssets(assets.map(a => a.id === existing.id
+          ? { ...a, quantity: totalQty, purchasePrice: avgPrice }
+          : a));
+      } else {
+        saveAssets([...assets, { id: Date.now().toString(), ...data }]);
+      }
+    }
+    closeForm(); setActiveView('dashboard');
+  }, [assets, editingAsset, saveAssets, closeForm]);
+
   // ── AI ──
-  const AI_PHRASES = ['Acessando dados de mercado...','Avaliando notícias recentes...','Calculando tendências...','Cruzando indicadores técnicos...'];
-  const handleAnalyze = async (asset: Asset) => {
+  const handleAnalyze = useCallback(async (asset: Asset) => {
     setAnalysisAsset(asset); setAnalysisResult(null); setAnalysisLoading(true);
     setAnalysisVisible(true); setAnalysisPhrase(AI_PHRASES[0]);
     let idx=0; const iv=setInterval(()=>{ idx=(idx+1)%AI_PHRASES.length; setAnalysisPhrase(AI_PHRASES[idx]); },900);
@@ -1594,7 +1921,7 @@ export default function Dashboard() {
     try { setAnalysisResult(await analyzeAsset(asset,currentPrices[asset.symbol])); }
     catch { setAnalysisResult({ recommendation:'MANTER', analysis:'Não foi possível gerar a análise no momento.' }); }
     setAnalysisLoading(false);
-  };
+  }, [currentPrices]);
 
   // ── Filtered/sorted ──
   const filteredAssets = useMemo(() => {
@@ -1615,20 +1942,23 @@ export default function Dashboard() {
         return sortAsc?va-vb:vb-va;
       }
     });
-  }, [assets, filters, sortBy, sortAsc]);
+  }, [assets, filters, sortBy, sortAsc, dollarRate]);
 
-  // ── Metrics ──
-  const totalInvested = assets.reduce((s,a)=>s+getValueInBRL(a.quantity*a.purchasePrice,a.currency,dollarRate),0);
-  const totalCurrent  = assets.reduce((s,a)=>s+getValueInBRL(a.quantity*(currentPrices[a.symbol]??a.purchasePrice),a.currency,dollarRate),0);
-  const rendimento    = totalCurrent - totalInvested;
-  const rentabilidade = totalInvested>0 ? (rendimento/totalInvested)*100 : 0;
-  const periodo = (() => {
-    if (!assets.length) return '—';
-    const sorted = [...assets].sort((a,b)=>a.date.localeCompare(b.date));
-    const [y1,m1,d1] = sorted[0].date.split('-');
-    const [y2,m2,d2] = getLocalDateString().split('-');
-    return `De ${d1} ${MONTHS_PT[parseInt(m1)-1]} ${y1} a ${d2} ${MONTHS_PT[parseInt(m2)-1]} ${y2}`;
-  })();
+  // ── Metrics ── (recalcula apenas quando carteira, preços ou câmbio mudam)
+  const { totalInvested, totalCurrent, rendimento, rentabilidade, periodo } = useMemo(() => {
+    const totalInvested = assets.reduce((s,a)=>s+getValueInBRL(a.quantity*a.purchasePrice,a.currency,dollarRate),0);
+    const totalCurrent  = assets.reduce((s,a)=>s+getValueInBRL(a.quantity*(currentPrices[a.symbol]??a.purchasePrice),a.currency,dollarRate),0);
+    const rendimento    = totalCurrent - totalInvested;
+    const rentabilidade = totalInvested>0 ? (rendimento/totalInvested)*100 : 0;
+    let periodo = '—';
+    if (assets.length) {
+      const sorted = [...assets].sort((a,b)=>a.date.localeCompare(b.date));
+      const [y1,m1,d1] = sorted[0].date.split('-');
+      const [y2,m2,d2] = getLocalDateString().split('-');
+      periodo = `De ${d1} ${MONTHS_PT[parseInt(m1)-1]} ${y1} a ${d2} ${MONTHS_PT[parseInt(m2)-1]} ${y2}`;
+    }
+    return { totalInvested, totalCurrent, rendimento, rentabilidade, periodo };
+  }, [assets, currentPrices, dollarRate]);
 
   const [news,        setNews]        = useState<NewsItem[]>(() => getNewsForMyAssets(assets));
   const [newsLoading, setNewsLoading] = useState(false);
@@ -1652,17 +1982,6 @@ export default function Dashboard() {
       .finally(() => { if (!cancelled) setNewsLoading(false); });
     return () => { cancelled = true; };
   }, []);
-
-  const isEditing     = editingAsset !== null;
-  const todayStr      = getLocalDateString();
-  const isTodayActive = formData.date === todayStr;
-  const example       = getAssetExample(formData.category, formData.currency);
-  const currSymbol    = formData.currency==='USD' ? '$' : 'R$';
-
-  // preset badge info
-  const presetInfo = presetCategoryId
-    ? (VT_CATEGORIES.find(c => c.id === presetCategoryId) ?? null)
-    : null;
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1999,273 +2318,16 @@ export default function Dashboard() {
         </View>
       </Modal>
 
-      {/* ══ Add / Edit Modal ══════════════════════════════════════════════════ */}
-      <Modal animationType="slide" transparent visible={modalVisible}
-        onRequestClose={()=>{ setModalVisible(false); resetForm(); }}>
-        <View style={s.modalOverlay}>
-          <View style={s.formModal}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={s.formTitle}>{isEditing ? 'Editar Ativo' : 'Novo Ativo'}</Text>
-
-              {/* Preset badge + seletor de categoria */}
-              {presetInfo && !isEditing && (
-                <>
-                  <View style={[s.presetBadge, { borderColor: presetInfo.accentBorder, backgroundColor: presetInfo.accentDim }]}>
-                    <Text style={s.presetBadgeIcon}>{presetInfo.icon}</Text>
-                    <View style={{ flex:1 }}>
-                      <Text style={[s.presetBadgeTitle, { color: presetInfo.accent }]}>{presetInfo.title}</Text>
-                      <Text style={s.presetBadgeLabel}>{presetInfo.exchange} · categoria pré-selecionada</Text>
-                    </View>
-                  </View>
-                  {/* Trocar categoria */}
-                  <Text style={s.presetSwitchLabel}>Trocar categoria</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={s.presetSwitchRow}>
-                    {VT_CATEGORIES.map(cat => {
-                      const isActive = presetCategoryId === cat.id;
-                      return (
-                        <TouchableOpacity
-                          key={cat.id}
-                          style={[s.presetSwitchTab, isActive && s.presetSwitchTabActive]}
-                          onPress={() => {
-                            setPresetCategoryId(cat.id);
-                            setPresetFields(cat.preset);
-                            setFormData(p => ({ ...p,
-                              category: cat.preset.category,
-                              currency: cat.preset.currency,
-                              market:   cat.preset.market,
-                            }));
-                          }}
-                        >
-                          <Text style={s.presetSwitchIcon}>{cat.icon}</Text>
-                          <Text style={[s.presetSwitchText, isActive && s.presetSwitchTextActive]}>
-                            {cat.title}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </>
-              )}
-
-              <Text style={s.formLabel}>Código (Ticker)</Text>
-              <TextInput
-                style={[s.formInput, isEditing ? s.formInputDisabled : focusedField==='symbol' && s.formInputFocused]}
-                placeholder={`Ex: ${example.ticker}`} placeholderTextColor={C.TEXT_MUTED}
-                value={formData.symbol}
-                onChangeText={t=>!isEditing&&handleTickerChange(t)}
-                onFocus={()=>setFocusedField('symbol')} onBlur={()=>setFocusedField(null)}
-                editable={!isEditing} autoCapitalize="characters" autoCorrect={false}
-              />
-              {!isEditing && suggestions.length>0 && (
-                <View style={s.suggestBox}>
-                  {suggestions.map((a,i)=>(
-                    <TouchableOpacity key={a.symbol}
-                      style={[s.suggestItem,i===suggestions.length-1&&{borderBottomWidth:0}]}
-                      onPress={()=>handleSelectSuggestion(a)}>
-                      <View>
-                        <Text style={s.suggestSymbol}>{a.symbol}</Text>
-                        <Text style={s.suggestName}>{a.name}</Text>
-                      </View>
-                      <View style={{alignItems:'flex-end'}}>
-                        <Text style={s.suggestTag}>
-                          {a.category==='crypto'?'₿ Cripto':a.market==='nacional'?'🇧🇷 B3':'🌎 Nasdaq'}
-                        </Text>
-                        <Text style={s.suggestCur}>{a.currency}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-              <Text style={s.formLabel}>Nome do Ativo</Text>
-              <TextInput
-                style={[s.formInput, isEditing ? s.formInputDisabled : focusedField==='name' && s.formInputFocused]}
-                placeholder="Ex: Bitcoin" placeholderTextColor={C.TEXT_MUTED}
-                value={formData.name}
-                onChangeText={t=>!isEditing&&setFormData(p=>({...p,name:t}))}
-                onFocus={()=>setFocusedField('name')} onBlur={()=>setFocusedField(null)}
-                editable={!isEditing}
-              />
-
-              <Text style={s.formLabel}>Quantidade</Text>
-              <TextInput style={[s.formInput, focusedField==='qty' && s.formInputFocused]}
-                placeholder="Ex: 0,254"
-                placeholderTextColor={C.TEXT_MUTED} keyboardType="decimal-pad"
-                value={formData.quantity.replace('.',',')}
-                onFocus={()=>setFocusedField('qty')} onBlur={()=>setFocusedField(null)}
-                onChangeText={t=>setFormData(p=>({...p,quantity:t.replace(/,/g,'.')}))}
-              />
-
-              <View style={s.formLabelRow}>
-                <Text style={[s.formLabel,{marginTop:0,marginBottom:0}]}>Preço de Compra ({currSymbol})</Text>
-                {fetchingPrice && <Text style={s.fetchingHint}>Buscando cotação...</Text>}
-              </View>
-              <TextInput
-                style={[s.formInput, fetchingPrice ? s.formInputFetching : focusedField==='price' && s.formInputFocused]}
-                placeholder={fetchingPrice?'Aguardando API...':`Ex: ${formData.currency==='USD'?'100,00':'500,00'}`}
-                placeholderTextColor={fetchingPrice?C.ORANGE:C.TEXT_MUTED}
-                keyboardType="decimal-pad"
-                value={isTypingPrice ? formData.purchasePrice.replace('.',',') : formatMoneyDisplay(formData.purchasePrice)}
-                onFocus={()=>{ setIsTypingPrice(true); setFocusedField('price'); }}
-                onBlur={()=>{ setIsTypingPrice(false); setFocusedField(null); }}
-                onChangeText={t=>setFormData(p=>({...p,purchasePrice:t.replace(/\./g,'').replace(',','.')}))}
-              />
-
-              <Text style={s.formLabel}>Data de Obtenção</Text>
-              <View style={s.dateRow}>
-                <TouchableOpacity style={s.dateInput} activeOpacity={0.7}
-                  onPress={()=>{ setCalendarMonth(formData.date||getLocalDateString()); setCalendarVisible(true); }}>
-                  <TextInput style={s.dateInputText} placeholder="DD/MM/AAAA"
-                    placeholderTextColor={C.TEXT_MUTED}
-                    value={formData.date ? formatDate(formData.date) : ''}
-                    onChangeText={t=>{
-                      if (t==='') { setFormData(p=>({...p,date:''})); return; }
-                      if (t.length===10&&t[2]==='/'&&t[5]==='/') {
-                        const [d,m,y]=t.split('/');
-                        setFormData(p=>({...p,date:`${y}-${m}-${d}`}));
-                      }
-                    }} editable />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.todayBtn, isTodayActive&&s.todayBtnActive]}
-                  onPress={()=>{
-                    if (isTodayActive) setFormData(p=>({...p,date:''}));
-                    else { setFormData(p=>({...p,date:todayStr})); setCalendarVisible(false); }
-                  }}>
-                  <Text style={[s.todayBtnText, isTodayActive&&s.todayBtnTextActive]}>
-                    {isTodayActive ? '✓ Hoje' : 'Hoje'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Calendar */}
-              {calendarVisible && (
-                <Modal animationType="fade" transparent visible onRequestClose={()=>setCalendarVisible(false)}>
-                  <View style={s.calendarOverlay}>
-                    <View style={s.calendarBox}>
-                      <View style={s.calendarBoxHeader}>
-                        <Text style={s.calendarBoxTitle}>Selecionar Data</Text>
-                        <TouchableOpacity onPress={()=>setCalendarVisible(false)}>
-                          <Text style={s.calendarCloseX}>✕</Text>
-                        </TouchableOpacity>
-                      </View>
-                      <Calendar current={calendarMonth} maxDate={getLocalDateString()}
-                        onMonthChange={m=>setCalendarMonth(m.dateString)}
-                        renderHeader={date=>{
-                          const d=new Date(date.toString());const mi=d.getMonth();const yr=d.getFullYear();
-                          return (
-                            <TouchableOpacity onPress={()=>{ setPickerYear(yr);setPickerMonth(mi);setMonthYearVisible(true); }}
-                              style={{paddingVertical:8,paddingHorizontal:16}}>
-                              <Text style={{color:C.TEXT,fontSize:16,fontWeight:'700'}}>{MONTHS_PT[mi]} {yr} ▾</Text>
-                            </TouchableOpacity>
-                          );
-                        }}
-                        onDayPress={day=>{ setFormData(p=>({...p,date:day.dateString})); setCalendarVisible(false); }}
-                        markedDates={{[formData.date]:{selected:true,selectedColor:C.ORANGE}}}
-                        theme={{ backgroundColor:C.CARD, calendarBackground:C.CARD, textSectionTitleColor:C.TEXT_SUB,
-                          textSectionTitleDisabledColor:C.TEXT_MUTED, selectedDayBackgroundColor:C.ORANGE,
-                          selectedDayTextColor:'#fff', todayTextColor:C.ORANGE, dayTextColor:C.TEXT,
-                          textDisabledColor:C.TEXT_MUTED, arrowColor:C.ORANGE, monthTextColor:C.TEXT, indicatorColor:C.ORANGE }}
-                      />
-                      <TouchableOpacity style={s.calendarCloseBtn} onPress={()=>setCalendarVisible(false)}>
-                        <Text style={s.calendarCloseBtnText}>Fechar</Text>
-                      </TouchableOpacity>
-                      {monthYearVisible && (
-                        <Modal animationType="fade" transparent visible onRequestClose={()=>setMonthYearVisible(false)}>
-                          <View style={s.calendarOverlay}>
-                            <View style={s.calendarBox}>
-                              <View style={s.calendarBoxHeader}>
-                                <Text style={s.calendarBoxTitle}>Mês / Ano</Text>
-                                <TouchableOpacity onPress={()=>setMonthYearVisible(false)}>
-                                  <Text style={s.calendarCloseX}>✕</Text>
-                                </TouchableOpacity>
-                              </View>
-                              <View style={s.yearPickerRow}>
-                                <TouchableOpacity onPress={()=>setPickerYear(y=>y-1)} style={s.yearArrowBtn}>
-                                  <Text style={s.yearArrowText}>‹</Text>
-                                </TouchableOpacity>
-                                <Text style={s.yearText}>{pickerYear}</Text>
-                                <TouchableOpacity onPress={()=>{ if(pickerYear<new Date().getFullYear())setPickerYear(y=>y+1); }} style={s.yearArrowBtn}>
-                                  <Text style={[s.yearArrowText, pickerYear>=new Date().getFullYear()&&{color:C.TEXT_MUTED}]}>›</Text>
-                                </TouchableOpacity>
-                              </View>
-                              <View style={s.monthGrid}>
-                                {MONTHS_PT.map((m,i)=>{
-                                  const now=new Date();
-                                  const fut=pickerYear>now.getFullYear()||(pickerYear===now.getFullYear()&&i>now.getMonth());
-                                  const sel=i===pickerMonth;
-                                  return (
-                                    <TouchableOpacity key={i} disabled={fut}
-                                      style={[s.monthGridBtn,sel&&s.monthGridBtnActive,fut&&{opacity:0.25}]}
-                                      onPress={()=>{ setCalendarMonth(`${pickerYear}-${String(i+1).padStart(2,'0')}-01`); setPickerMonth(i); setMonthYearVisible(false); }}>
-                                      <Text style={[s.monthGridText,sel&&s.monthGridTextActive]}>{m}</Text>
-                                    </TouchableOpacity>
-                                  );
-                                })}
-                              </View>
-                              <TouchableOpacity style={s.calendarCloseBtn} onPress={()=>setMonthYearVisible(false)}>
-                                <Text style={s.calendarCloseBtnText}>Fechar</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        </Modal>
-                      )}
-                    </View>
-                  </View>
-                </Modal>
-              )}
-
-              {/* Category / Currency / Market — hidden when preset is active */}
-              {!isEditing && !presetFields && (
-                <>
-                  <Text style={s.formLabel}>Categoria</Text>
-                  <View style={s.toggleRow}>
-                    {(['crypto','fiat'] as Category[]).map(cat=>(
-                      <TouchableOpacity key={cat}
-                        style={[s.toggleBtn, formData.category===cat&&s.toggleBtnActive]}
-                        onPress={()=>setFormData(p=>({...p,category:cat}))}>
-                        <Text style={[s.toggleBtnText, formData.category===cat&&s.toggleBtnTextActive]}>
-                          {cat==='crypto'?'Cripto':'Fiat'}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <Text style={s.formLabel}>Moeda de Origem</Text>
-                  <View style={{ marginBottom: 2 }}>
-                    <CurrencyToggle value={formData.currency} onChange={handleCurrencyChange} />
-                  </View>
-                  {formData.category==='fiat' && (
-                    <>
-                      <Text style={s.formLabel}>Mercado</Text>
-                      <View style={s.toggleRow}>
-                        {(['nacional','estrangeiro'] as Market[]).map(mkt=>(
-                          <TouchableOpacity key={mkt}
-                            style={[s.toggleBtn, formData.market===mkt&&s.toggleBtnActive]}
-                            onPress={()=>setFormData(p=>({...p,market:mkt}))}>
-                            <Text style={[s.toggleBtnText, formData.market===mkt&&s.toggleBtnTextActive]}>
-                              {mkt==='nacional'?'🇧🇷 Ibovespa':'🌎 Nasdaq'}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    </>
-                  )}
-                </>
-              )}
-
-              <View style={s.formBtnRow}>
-                <TouchableOpacity style={s.cancelBtn} onPress={()=>{ setModalVisible(false); resetForm(); }}>
-                  <Text style={s.cancelBtnText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.saveBtn} onPress={handleAddAsset}>
-                  <Text style={s.saveBtnText}>{isEditing ? 'Atualizar' : 'Salvar'}</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      {/* ══ Add / Edit Modal (estado interno isolado no AssetFormModal) ══════ */}
+      <AssetFormModal
+        isOpen={modalVisible}
+        editingAsset={editingAsset}
+        initialPreset={presetFields}
+        initialPresetCategoryId={presetCategoryId}
+        dollarRate={dollarRate}
+        onClose={closeForm}
+        onSave={handleSaveAsset}
+      />
 
     </View>
   );
