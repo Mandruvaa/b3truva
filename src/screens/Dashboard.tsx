@@ -1274,6 +1274,46 @@ function Sidebar({
   );
 }
 
+// ─── MobileNavBar ─────────────────────────────────────────────────────────────
+// Navegação inferior para telas < 640px — substitui a Sidebar no mobile,
+// que antes simplesmente desaparecia e deixava o app sem navegação.
+function MobileNavBar({
+  onInvestir, onHome, onCarteira, onNoticias, onSettings, activeView,
+}: {
+  onInvestir: () => void;
+  onHome:     () => void;
+  onCarteira: () => void;
+  onNoticias: () => void;
+  onSettings: () => void;
+  activeView: ActiveView;
+}) {
+  const items = [
+    { icon:'⌂',  label:'Início',   active: activeView === 'dashboard', onPress: onHome,     cta:false },
+    { icon:'📊', label:'Carteira', active: activeView === 'carteira',  onPress: onCarteira, cta:false },
+    { icon:'+',  label:'',         active: activeView === 'investir',  onPress: onInvestir, cta:true  },
+    { icon:'📰', label:'Hub IA',   active: activeView === 'noticias',  onPress: onNoticias, cta:false },
+    { icon:'⚙',  label:'Ajustes',  active: false,                      onPress: onSettings, cta:false },
+  ];
+  return (
+    <View style={s.mobileNavBar}>
+      {items.map((item, i) => item.cta ? (
+        <TouchableOpacity key={i} activeOpacity={0.85}
+          style={[s.mobileNavAddBtn, item.active && s.mobileNavAddBtnActive]}
+          onPress={item.onPress}>
+          <Text style={s.mobileNavAddBtnText}>+</Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity key={i}
+          style={[s.mobileNavItem, item.active && s.mobileNavItemActive]}
+          onPress={item.onPress}>
+          <Text style={[s.mobileNavIcon, !item.active && s.mobileNavIconInactive]}>{item.icon}</Text>
+          <Text style={[s.mobileNavLabel, item.active && s.mobileNavLabelActive]}>{item.label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
 // ─── NewsCard ─────────────────────────────────────────────────────────────────
 const NewsCard = React.memo(function NewsCard({ item }: { item: NewsItem }) {
   return (
@@ -1794,7 +1834,8 @@ function AssetFormModal({
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function Dashboard() {
   const { width } = useWindowDimensions();
-  const showSidebar = width >= 640;
+  const isMobile    = width < 640;
+  const showSidebar = !isMobile;
   const showNews    = width >= 1040;
 
   // ── View state ──
@@ -1977,7 +2018,7 @@ export default function Dashboard() {
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={s.screen}>
+    <View style={[s.screen, isMobile && s.screenMobile]}>
 
       {/* Sidebar */}
       {showSidebar && (
@@ -2061,11 +2102,11 @@ export default function Dashboard() {
             onBack={() => setActiveView('dashboard')}
           />
         ) : (
-          <ScrollView style={s.mainScroll} contentContainerStyle={s.mainContent}>
+          <ScrollView style={s.mainScroll} contentContainerStyle={[s.mainContent, isMobile && s.mainContentMobile]}>
 
             {/* Na bolsa agora */}
-            <View style={s.card}>
-              <View style={s.cardHeader}>
+            <View style={[s.card, isMobile && s.cardMobile]}>
+              <View style={[s.cardHeader, isMobile && s.cardHeaderWrap]}>
                 <View>
                   <View style={s.cardTitleRow}>
                     <Text style={s.cardTitleIcon}>◈</Text>
@@ -2173,8 +2214,8 @@ export default function Dashboard() {
             </View>
 
             {/* Bottom row */}
-            <View style={s.bottomRow}>
-              <View style={[s.card,s.investCard]}>
+            <View style={[s.bottomRow, isMobile && s.bottomRowMobile]}>
+              <View style={[s.card, !isMobile && s.investCard, isMobile && s.cardStacked]}>
                 <View style={s.cardHeader}>
                   <View style={s.cardTitleRow}>
                     <Text style={s.cardTitleIcon}>▸▸</Text>
@@ -2200,7 +2241,7 @@ export default function Dashboard() {
                 ))}
               </View>
 
-              <View style={[s.card,s.investirCard]}>
+              <View style={[s.card, !isMobile && s.investirCard, isMobile && s.cardStacked]}>
                 <View style={s.cardHeader}>
                   <Text style={[s.cardTitle,{color:C.ORANGE}]}>+ Investir</Text>
                 </View>
@@ -2229,6 +2270,18 @@ export default function Dashboard() {
           </ScrollView>
         )}
       </View>
+
+      {/* ══ Mobile bottom navigation ═════════════════════════════════════════ */}
+      {isMobile && (
+        <MobileNavBar
+          onHome={() => setActiveView('dashboard')}
+          onCarteira={() => setActiveView('carteira')}
+          onNoticias={() => setActiveView('noticias')}
+          onInvestir={() => setActiveView(v => v==='investir'?'dashboard':'investir')}
+          onSettings={() => setSettingsVisible(true)}
+          activeView={activeView}
+        />
+      )}
 
       {/* ══ Settings Modal ═══════════════════════════════════════════════════ */}
       <Modal animationType="slide" transparent visible={settingsVisible}
@@ -2318,7 +2371,28 @@ export default function Dashboard() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 const s = StyleSheet.create({
-  screen: { flex:1, flexDirection:'row', backgroundColor:C.BG },
+  screen:       { flex:1, flexDirection:'row', backgroundColor:C.BG },
+  screenMobile: { flexDirection:'column' },
+
+  // ── Mobile bottom nav (telas < 640px) ──
+  mobileNavBar: {
+    flexDirection:'row', alignItems:'center', justifyContent:'space-around',
+    backgroundColor:C.SIDEBAR, borderTopWidth:1, borderTopColor:C.BORDER,
+    paddingTop:6, paddingBottom:10, paddingHorizontal:8,
+  },
+  mobileNavItem:         { alignItems:'center', justifyContent:'center', minWidth:56, paddingVertical:4, paddingHorizontal:6, borderRadius:12 },
+  mobileNavItemActive:   { backgroundColor:C.ORANGE_DIM },
+  mobileNavIcon:         { fontSize:20, color:C.ORANGE },
+  mobileNavIconInactive: { color:C.TEXT_MUTED },
+  mobileNavLabel:        { fontSize:9, fontWeight:'600', color:C.TEXT_MUTED, marginTop:2 },
+  mobileNavLabelActive:  { color:C.ORANGE },
+  mobileNavAddBtn: {
+    width:48, height:48, borderRadius:24, backgroundColor:C.ORANGE,
+    alignItems:'center', justifyContent:'center', marginTop:-22,
+    borderWidth:3, borderColor:C.BG,
+  },
+  mobileNavAddBtnActive: { backgroundColor:'#FF8A3D' },
+  mobileNavAddBtnText:   { color:'#fff', fontSize:24, fontWeight:'700', lineHeight:26 },
 
   // ── Sidebar ──
   sidebar: {
@@ -2392,12 +2466,15 @@ const s = StyleSheet.create({
   newsTime:        { color:C.TEXT_MUTED, fontSize:10 },
 
   // ── Main scroll ──
-  mainScroll:  { flex:1 },
-  mainContent: { padding:24, gap:16, paddingBottom:48, maxWidth:1200, width:'100%' as any, alignSelf:'center' as any },
+  mainScroll:        { flex:1 },
+  mainContent:       { padding:24, gap:16, paddingBottom:48, maxWidth:1200, width:'100%' as any, alignSelf:'center' as any },
+  mainContentMobile: { padding:12, gap:12, paddingBottom:32 },
 
   // ── Generic card ──
-  card: { backgroundColor:C.CARD, borderRadius:16, padding:20, borderWidth:1, borderColor:C.BORDER },
-  cardHeader:      { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 },
+  card:       { backgroundColor:C.CARD, borderRadius:16, padding:20, borderWidth:1, borderColor:C.BORDER },
+  cardMobile: { padding:14 },
+  cardHeader:     { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 },
+  cardHeaderWrap: { flexWrap:'wrap', gap:10 },
   cardTitleRow:    { flexDirection:'row', alignItems:'center', gap:6 },
   cardTitleIcon:   { color:C.ORANGE, fontSize:13, fontWeight:'700' },
   cardTitle:       { color:C.TEXT, fontSize:15, fontWeight:'700' },
@@ -2444,8 +2521,11 @@ const s = StyleSheet.create({
 
   // ── Bottom row ──
   bottomRow:       { flexDirection:'row', gap:16 },
+  bottomRowMobile: { flexDirection:'column' },
   investCard:      { flex:3 },
   investirCard:    { flex:2 },
+  // empilhado em coluna: sem flex (altura pelo conteúdo), largura total
+  cardStacked:     { width:'100%' as any },
   investRow:       { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingVertical:10, borderBottomWidth:1, borderBottomColor:C.BORDER },
   investLabel:     { color:C.TEXT_SUB, fontSize:13 },
   investValue:     { color:C.TEXT, fontSize:14, fontWeight:'700' },
