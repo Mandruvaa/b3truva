@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { KNOWN_ASSETS } from '../data/knownAssets';
+import { KnownAsset, KNOWN_ASSETS } from '../data/knownAssets';
 
 export const DOLLAR_RATE_FALLBACK = 5.0;
 
@@ -88,6 +88,33 @@ export async function fetchCryptoPrices(symbols: string[]): Promise<CryptoPriceM
     console.log('Erro na API CoinGecko:', e);
   }
   return result;
+}
+
+// Cotação única via Yahoo v8 (endpoint chart) — usada no auto-preenchimento do formulário
+async function fetchYahooQuote(yahooSymbol: string): Promise<number> {
+  const res = await fetch(corsUrl(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}`
+  ));
+  if (!res.ok) throw new Error(`Yahoo ${res.status}`);
+  const data = await res.json();
+  const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+  if (price == null) throw new Error('Sem preço na resposta Yahoo');
+  return price;
+}
+
+/**
+ * Busca o preço atual de um único ativo conhecido (auto-preenchimento do formulário).
+ * Cripto → CoinGecko (na moeda do ativo). Ações → Yahoo (B3 com sufixo .SA).
+ */
+export async function fetchAssetPrice(asset: KnownAsset): Promise<number> {
+  if (asset.category === 'crypto' && asset.coingeckoId) {
+    const prices = await fetchCryptoPrices([asset.symbol]);
+    const p = prices[asset.symbol];
+    if (!p) throw new Error('Sem preço na resposta CoinGecko');
+    return asset.currency === 'BRL' ? p.brl : p.usd;
+  }
+  const yahooSym = asset.market === 'nacional' ? `${asset.symbol}.SA` : asset.symbol;
+  return fetchYahooQuote(yahooSym);
 }
 
 export type DollarRateResult = { rate: number; online: boolean };

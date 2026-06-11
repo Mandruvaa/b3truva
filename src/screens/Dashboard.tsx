@@ -17,8 +17,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 import { KnownAsset, KNOWN_ASSETS, searchAssets } from '../data/knownAssets';
-import { fetchAssetPrice } from '../api/quoteApi';
-import { fetchPortfolioPrices, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
+import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
 import { analyzeAsset, AIAnalysis } from '../services/ai';
 import Svg, { Path, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
 import TradingViewChart from '../components/TradingViewChart';
@@ -1964,24 +1963,17 @@ export default function Dashboard() {
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError,   setNewsError]   = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Helper único de notícias — usado no mount e no botão ↻ de refresh
+  const loadNews = useCallback(() => {
     setNewsLoading(true);
     setNewsError(false);
     fetchMarketNews(15)
-      .then(articles => {
-        if (cancelled) return;
-        setNews(articles.map(articleToNewsItem));
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNewsError(true);
-          setNews(getNewsForMyAssets(assets));
-        }
-      })
-      .finally(() => { if (!cancelled) setNewsLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+      .then(articles => setNews(articles.map(articleToNewsItem)))
+      .catch(() => { setNewsError(true); setNews(getNewsForMyAssets(assets)); })
+      .finally(() => setNewsLoading(false));
+  }, [assets]);
+
+  useEffect(() => { loadNews(); }, []);
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
@@ -2018,18 +2010,7 @@ export default function Dashboard() {
           <View style={s.newsColumn}>
             <View style={s.newsColumnHeader}>
               <Text style={s.newsColumnTitle}>Últimas notícias</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  if (newsLoading) return;
-                  let cancelled = false;
-                  setNewsLoading(true);
-                  setNewsError(false);
-                  fetchMarketNews(15)
-                    .then(articles => { if (!cancelled) setNews(articles.map(articleToNewsItem)); })
-                    .catch(() => { if (!cancelled) { setNewsError(true); setNews(getNewsForMyAssets(assets)); } })
-                    .finally(() => { if (!cancelled) setNewsLoading(false); });
-                }}
-              >
+              <TouchableOpacity onPress={() => { if (!newsLoading) loadNews(); }}>
                 <Text style={[s.newsRefresh, newsLoading && { opacity: 0.4 }]}>↻</Text>
               </TouchableOpacity>
             </View>
