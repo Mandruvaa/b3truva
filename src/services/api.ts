@@ -90,14 +90,6 @@ export async function fetchCryptoPrices(symbols: string[]): Promise<CryptoPriceM
   return result;
 }
 
-// Extrai apenas o preço USD para alimentar o PriceMap de fetchAllPrices
-async function fetchCryptoBatch(symbols: string[]): Promise<PriceMap> {
-  const rich = await fetchCryptoPrices(symbols);
-  const prices: PriceMap = {};
-  for (const [sym, p] of Object.entries(rich)) prices[sym] = p.usd;
-  return prices;
-}
-
 export type DollarRateResult = { rate: number; online: boolean };
 
 /**
@@ -148,45 +140,51 @@ export async function fetchBrazilianStocks(tickers: string[]): Promise<Brazilian
   return result;
 }
 
-/**
- * Busca cotações em tempo real para todos os ativos da carteira.
- * Retorna um mapa symbol → preço na moeda nativa do ativo.
- * Falhas parciais não interrompem as demais requisições.
- */
-export async function fetchAllPrices(assets: AssetForPrice[]): Promise<PriceMap> {
-  const uniqueNational = [
-    ...new Set(
-      assets
-        .filter((a) => a.category === 'fiat' && a.market === 'nacional')
-        .map((a) => a.symbol)
-    ),
-  ];
-  const uniqueForeign = [
-    ...new Set(
-      assets
-        .filter((a) => a.category === 'fiat' && a.market === 'estrangeiro')
-        .map((a) => a.symbol)
-    ),
-  ];
-  const uniqueCrypto = [
-    ...new Set(
-      assets.filter((a) => a.category === 'crypto').map((a) => a.symbol)
-    ),
-  ];
+export type PortfolioPrices = {
+  prices: PriceMap;          // symbol → preço na moeda nativa do ativo
+  crypto: CryptoPriceMap;    // dados ricos de cripto (usd, brl, variação 24h)
+  b3:     BrazilianStockMap; // cotação B3 + variação diária
+};
 
-  // B3/BDRs usam sufixo .SA; Nasdaq usa símbolo direto. Ambos em um único request.
-  const [stockResult, cryptoResult] = await Promise.allSettled([
-    fetchYahooBatch(
-      [...uniqueNational.map((s) => `${s}.SA`), ...uniqueForeign],
-      [...uniqueNational, ...uniqueForeign]
-    ),
-    fetchCryptoBatch(uniqueCrypto),
+/**
+ * Pipeline unificado de cotações: uma única requisição por provedor.
+ * B3 → BrAPI (preço + variação diária) · EUA → Yahoo · Cripto → CoinGecko.
+ * Falhas parciais não interrompem as demais requisições; se a BrAPI
+ * falhar ou omitir tickers, o Yahoo (.SA) cobre apenas os que faltaram.
+ */
+export async function fetchPortfolioPrices(assets: AssetForPrice[]): Promise<PortfolioPrices> {
+  const uniq = (list: AssetForPrice[]) => [...new Set(list.map((a) => a.symbol))];
+  const national = uniq(assets.filter((a) => a.category === 'fiat' && a.market === 'nacional'));
+  const foreign  = uniq(assets.filter((a) => a.category === 'fiat' && a.market === 'estrangeiro'));
+  const cryptos  = uniq(assets.filter((a) => a.category === 'crypto'));
+
+  const [b3Result, foreignResult, cryptoResult] = await Promise.allSettled([
+    fetchBrazilianStocks(national),
+    fetchYahooBatch(foreign, foreign),
+    fetchCryptoPrices(cryptos),
   ]);
 
-  return {
-    ...(stockResult.status === 'fulfilled' ? stockResult.value : {}),
-    ...(cryptoResult.status === 'fulfilled' ? cryptoResult.value : {}),
-  };
+  const b3     = b3Result.status     === 'fulfilled' ? b3Result.value     : {};
+  const crypto = cryptoResult.status === 'fulfilled' ? cryptoResult.value : {};
+  const prices: PriceMap =
+    foreignResult.status === 'fulfilled' ? { ...foreignResult.value } : {};
+
+  for (const [sym, q] of Object.entries(b3))     prices[sym] = q.price;
+  for (const [sym, p] of Object.entries(crypto)) prices[sym] = p.usd;
+
+  const missingNational = national.filter((s) => !(s in prices));
+  if (missingNational.length) {
+    try {
+      Object.assign(
+        prices,
+        await fetchYahooBatch(missingNational.map((s) => `${s}.SA`), missingNational)
+      );
+    } catch (e) {
+      console.log('Erro no fallback Yahoo para B3:', e);
+    }
+  }
+
+  return { prices, crypto, b3 };
 }
 
 // ─── Historical OHLC (90 days, daily candles) ─────────────────────────────────

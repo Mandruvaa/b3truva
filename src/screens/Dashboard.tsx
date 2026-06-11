@@ -18,7 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 import { KnownAsset, KNOWN_ASSETS, searchAssets } from '../data/knownAssets';
 import { fetchAssetPrice } from '../api/quoteApi';
-import { fetchAllPrices, fetchCryptoPrices, fetchBrazilianStocks, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
+import { fetchPortfolioPrices, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
 import { analyzeAsset, AIAnalysis } from '../services/ai';
 import Svg, { Path, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
 import TradingViewChart from '../components/TradingViewChart';
@@ -1444,46 +1444,19 @@ export default function Dashboard() {
     });
   }, []);
 
-  // Busca preços reais + variação 24h apenas dos ativos cripto na carteira
-  const cryptoSymbols = useMemo(
-    () => [...new Set(assets.filter(a => a.category === 'crypto').map(a => a.symbol))],
-    [assets],
-  );
-  useEffect(() => {
-    if (!cryptoSymbols.length) return;
-    setLoadingCrypto(true);
-    fetchCryptoPrices(cryptoSymbols)
-      .then(setCryptoPrices)
-      .finally(() => setLoadingCrypto(false));
-  }, [cryptoSymbols.join(',')]);
-
-  // Busca preço atual + variação diária de ações B3 via BrAPI
-  const b3Symbols = useMemo(
-    () => [...new Set(assets.filter(a => a.category === 'fiat' && a.market === 'nacional').map(a => a.symbol))],
-    [assets],
-  );
-  useEffect(() => {
-    if (!b3Symbols.length) return;
-    setLoadingB3(true);
-    fetchBrazilianStocks(b3Symbols).then(b3Data => {
-      setB3Prices(b3Data);
-      // Sobrescreve currentPrices com dados mais frescos da BrAPI para ativos B3
-      if (Object.keys(b3Data).length) {
-        setCurrentPrices(prev => {
-          const next = { ...prev };
-          for (const [sym, q] of Object.entries(b3Data)) next[sym] = q.price;
-          return next;
-        });
-      }
-    }).finally(() => setLoadingB3(false));
-  }, [b3Symbols.join(',')]);
-
   // ── Data ──
+  // Pipeline unificado: uma requisição por provedor (BrAPI/Yahoo/CoinGecko)
+  // alimenta preços, variação cripto 24h e variação diária B3 numa só passada.
   const fetchPricesForAssets = async (list: Asset[]) => {
     if (!list.length) return;
-    setLoadingPrices(true);
-    try { setCurrentPrices(await fetchAllPrices(list)); } catch {}
-    finally { setLoadingPrices(false); }
+    setLoadingPrices(true); setLoadingCrypto(true); setLoadingB3(true);
+    try {
+      const { prices, crypto, b3 } = await fetchPortfolioPrices(list);
+      setCurrentPrices(prices);
+      setCryptoPrices(crypto);
+      setB3Prices(b3);
+    } catch {}
+    finally { setLoadingPrices(false); setLoadingCrypto(false); setLoadingB3(false); }
   };
   const loadAssets = async () => {
     try {
