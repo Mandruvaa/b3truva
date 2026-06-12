@@ -25,8 +25,12 @@ import Svg, { Path, Rect, Defs, LinearGradient as SVGGradient, Stop } from 'reac
 import { Feather } from '@expo/vector-icons';
 import TradingViewChart from '../components/TradingViewChart';
 
-// Logo oficial B3truva (wordmark "B3" azul-marinho + "TRUVA" dourado)
-const B3TRUVA_LOGO = require('../../assets/B3truva.png');
+// Logo oficial B3truva (wordmark "B3" azul-marinho + "TRUVA" dourado).
+// Web: servido de public/ com URL relativa — resolve sob o baseUrl /b3truva
+// do GitHub Pages sem depender da pasta de assets do bundler.
+const B3TRUVA_LOGO = Platform.OS === 'web'
+  ? { uri: 'B3truva.png' }
+  : require('../../assets/B3truva.png');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Category   = 'fiat' | 'crypto';
