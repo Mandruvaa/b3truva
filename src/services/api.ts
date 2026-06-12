@@ -17,6 +17,7 @@ type AssetForPrice = {
   symbol: string;
   category: 'fiat' | 'crypto';
   market: 'nacional' | 'estrangeiro';
+  coingeckoId?: string; // permite preço de moedas fora da lista KNOWN_ASSETS
 };
 
 function corsUrl(url: string): string {
@@ -54,14 +55,18 @@ async function fetchYahooBatch(
  * Busca preços e variação 24h de criptomoedas via CoinGecko (sem auth, CORS nativo).
  * Retorna mapa symbol → { usd, brl, usd_24h_change, brl_24h_change }.
  */
-export async function fetchCryptoPrices(symbols: string[]): Promise<CryptoPriceMap> {
+export async function fetchCryptoPrices(
+  symbols: string[],
+  idOverrides?: Record<string, string>,
+): Promise<CryptoPriceMap> {
   const result: CryptoPriceMap = {};
   if (!symbols.length) return result;
 
   const symbolToId: Record<string, string> = {};
   for (const sym of symbols) {
     const known = KNOWN_ASSETS.find((a) => a.symbol === sym && a.category === 'crypto');
-    if (known?.coingeckoId) symbolToId[sym] = known.coingeckoId;
+    const id = idOverrides?.[sym] ?? known?.coingeckoId;
+    if (id) symbolToId[sym] = id;
   }
   const ids = [...new Set(Object.values(symbolToId))];
   if (!ids.length) return result;
@@ -103,15 +108,21 @@ async function fetchYahooQuote(yahooSymbol: string): Promise<number> {
 }
 
 /**
- * Busca o preço atual de um único ativo conhecido (auto-preenchimento do formulário).
- * Cripto → CoinGecko (na moeda do ativo). Ações → Yahoo (B3 com sufixo .SA).
+ * Busca o preço atual de um único ativo (auto-preenchimento do formulário).
+ * Cripto → CoinGecko pelo coingeckoId do próprio ativo (funciona para moedas
+ * fora da lista local, ex. vindas da busca). Ações → Yahoo (B3 com sufixo .SA).
  */
 export async function fetchAssetPrice(asset: KnownAsset): Promise<number> {
   if (asset.category === 'crypto' && asset.coingeckoId) {
-    const prices = await fetchCryptoPrices([asset.symbol]);
-    const p = prices[asset.symbol];
-    if (!p) throw new Error('Sem preço na resposta CoinGecko');
-    return asset.currency === 'BRL' ? p.brl : p.usd;
+    const vs  = asset.currency === 'BRL' ? 'brl' : 'usd';
+    const res = await fetch(corsUrl(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${asset.coingeckoId}&vs_currencies=${vs}`
+    ));
+    if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
+    const data  = await res.json();
+    const price = data?.[asset.coingeckoId]?.[vs];
+    if (price == null) throw new Error('Sem preço na resposta CoinGecko');
+    return price;
   }
   const yahooSym = asset.market === 'nacional' ? `${asset.symbol}.SA` : asset.symbol;
   return fetchYahooQuote(yahooSym);
@@ -183,12 +194,16 @@ export async function fetchPortfolioPrices(assets: AssetForPrice[]): Promise<Por
   const uniq = (list: AssetForPrice[]) => [...new Set(list.map((a) => a.symbol))];
   const national = uniq(assets.filter((a) => a.category === 'fiat' && a.market === 'nacional'));
   const foreign  = uniq(assets.filter((a) => a.category === 'fiat' && a.market === 'estrangeiro'));
-  const cryptos  = uniq(assets.filter((a) => a.category === 'crypto'));
+  const cryptoAssets = assets.filter((a) => a.category === 'crypto');
+  const cryptos  = uniq(cryptoAssets);
+  // ids salvos no ativo cobrem moedas fora da lista KNOWN_ASSETS (ex. JUP)
+  const cryptoIds: Record<string, string> = {};
+  for (const a of cryptoAssets) if (a.coingeckoId) cryptoIds[a.symbol] = a.coingeckoId;
 
   const [b3Result, foreignResult, cryptoResult] = await Promise.allSettled([
     fetchBrazilianStocks(national),
     fetchYahooBatch(foreign, foreign),
-    fetchCryptoPrices(cryptos),
+    fetchCryptoPrices(cryptos, cryptoIds),
   ]);
 
   const b3     = b3Result.status     === 'fulfilled' ? b3Result.value     : {};
@@ -392,6 +407,36 @@ export async function searchUsStocks(query: string): Promise<KnownAsset[]> {
       }));
   } catch (e) {
     console.log('Erro na busca Yahoo (EUA):', e);
+    return [];
+  }
+}
+
+// ─── Busca de criptomoedas (CoinGecko Search) ─────────────────────────────────
+/**
+ * Autocomplete de criptomoedas no mercado inteiro via CoinGecko /search.
+ * Inclui coingeckoId no retorno — essencial para preço automático e gráficos.
+ */
+export async function searchCryptos(query: string): Promise<KnownAsset[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  try {
+    const url = corsUrl(
+      `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(q)}`
+    );
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`CoinGecko search ${res.status}`);
+    const data = await res.json();
+    const coins: any[] = data?.coins ?? [];
+    return coins.slice(0, 8).map(c => ({
+      symbol:      String(c.symbol || '').toUpperCase(),
+      name:        (c.name || c.symbol) as string,
+      category:    'crypto' as const,
+      currency:    'USD' as const,
+      market:      'estrangeiro' as const,
+      coingeckoId: c.id as string,
+    })).filter(c => c.symbol && c.coingeckoId);
+  } catch (e) {
+    console.log('Erro na busca CoinGecko:', e);
     return [];
   }
 }

@@ -19,7 +19,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 import { KnownAsset, KNOWN_ASSETS, searchAssets } from '../data/knownAssets';
-import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, searchUsStocks, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
+import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, searchUsStocks, searchCryptos, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
 import { analyzeAsset, AIAnalysis } from '../services/ai';
 import Svg, { Path, Rect, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
 import { Feather } from '@expo/vector-icons';
@@ -41,6 +41,7 @@ interface Asset {
   id: string; name: string; symbol: string;
   category: Category; currency: Currency; market: Market;
   quantity: number; purchasePrice: number; date: string;
+  coingeckoId?: string; // cripto fora da lista local (ex. vinda da busca CoinGecko)
 }
 interface NewsItem {
   id: string; title: string; source: string; time: string;
@@ -1367,17 +1368,26 @@ const NewsCard = React.memo(function NewsCard({ item }: { item: NewsItem }) {
   const [imgFailed, setImgFailed] = useState(false);
   const showImage = !!item.imageUrl && !imgFailed;
 
-  const openArticle = () => {
-    if (!item.url) return;
-    if (Platform.OS === 'web') (window as any).open(item.url, '_blank', 'noopener');
-    else Linking.openURL(item.url).catch(() => {});
-  };
+  // Web: âncora <a href target=_blank> de verdade (semântica de hiperlink,
+  // cursor pointer e clique nativos do browser). Nativo: Linking.openURL.
+  const linkProps: any = !item.url
+    ? { disabled: true }
+    : Platform.OS === 'web'
+    ? {
+        href: item.url,
+        hrefAttrs: { target: '_blank', rel: 'noopener noreferrer' },
+        accessibilityRole: 'link',
+      }
+    : { onPress: () => Linking.openURL(item.url!).catch(() => {}) };
 
   return (
     <Pressable
-      onPress={openArticle}
-      disabled={!item.url}
-      style={(state: any) => [s.newsCard, item.url && state.hovered && s.newsCardHover]}
+      {...linkProps}
+      style={(state: any) => [
+        s.newsCard,
+        item.url && Platform.OS === 'web' && ({ cursor: 'pointer' } as any),
+        item.url && state.hovered && s.newsCardHover,
+      ]}
     >
       {showImage ? (
         <Image
@@ -1491,6 +1501,7 @@ interface AssetFormPayload {
   name: string; symbol: string;
   category: Category; currency: Currency; market: Market;
   quantity: number; purchasePrice: number; date: string;
+  coingeckoId?: string;
 }
 
 const EMPTY_FORM = {
@@ -1512,6 +1523,7 @@ function AssetFormModal({
 }) {
   // ── Form state (local) ──
   const [formData,      setFormData]      = useState(EMPTY_FORM);
+  const [pickedCoingeckoId, setPickedCoingeckoId] = useState<string | undefined>(undefined);
   const [suggestions,   setSuggestions]   = useState<KnownAsset[]>([]);
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [isTypingPrice, setIsTypingPrice] = useState(false);
@@ -1546,6 +1558,7 @@ function AssetFormModal({
     }
     setPresetFields(initialPreset);
     setPresetCategoryId(initialPresetCategoryId);
+    setPickedCoingeckoId(editingAsset?.coingeckoId);
     setSuggestions([]); setFetchingPrice(false); setIsTypingPrice(false);
     setFocusedField(null); setCalendarVisible(false); setMonthYearVisible(false);
   }, [isOpen, editingAsset, initialPreset, initialPresetCategoryId]);
@@ -1559,18 +1572,19 @@ function AssetFormModal({
     setFormData(p=>({...p, currency:cur, purchasePrice:np.toFixed(2)}));
   };
 
-  // Busca remota Yahoo (Ações EUA) com debounce e guarda contra resposta velha
-  const usSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const usSearchQuery = useRef('');
-  useEffect(() => () => { if (usSearchTimer.current) clearTimeout(usSearchTimer.current); }, []);
+  // Busca remota (EUA → Yahoo, Cripto → CoinGecko) com debounce
+  // e guarda contra resposta velha sobrescrever a digitação atual.
+  const remoteSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteSearchQuery = useRef('');
+  useEffect(() => () => { if (remoteSearchTimer.current) clearTimeout(remoteSearchTimer.current); }, []);
 
-  const queueUsSearch = (query: string) => {
-    usSearchQuery.current = query;
-    if (usSearchTimer.current) clearTimeout(usSearchTimer.current);
+  const queueRemoteSearch = (query: string, searchFn: (q: string) => Promise<KnownAsset[]>) => {
+    remoteSearchQuery.current = query;
+    if (remoteSearchTimer.current) clearTimeout(remoteSearchTimer.current);
     if (query.length < 2) return;
-    usSearchTimer.current = setTimeout(async () => {
-      const remote = await searchUsStocks(query);
-      if (usSearchQuery.current !== query || !remote.length) return;
+    remoteSearchTimer.current = setTimeout(async () => {
+      const remote = await searchFn(query);
+      if (remoteSearchQuery.current !== query || !remote.length) return;
       setSuggestions(prev => {
         const seen = new Set(prev.map(a => a.symbol));
         return [...prev, ...remote.filter(a => !seen.has(a.symbol))].slice(0, 8);
@@ -1595,20 +1609,25 @@ function AssetFormModal({
           c.preset.category === known.category && c.preset.market === known.market
         );
         if (matchedCat) { setPresetCategoryId(matchedCat.id); setPresetFields(matchedCat.preset); }
+        setPickedCoingeckoId(known.coingeckoId);
         setSuggestions(searchAssets(text));
         return;
       }
     }
     setFormData(p => ({ ...p, symbol: text }));
+    setPickedCoingeckoId(undefined); // digitação manual invalida o id da sugestão anterior
     setSuggestions(upper.length >= 1 ? searchAssets(text) : []);
-    // Ações EUA: complementa o autocomplete local com a busca do Yahoo Finance
+    // Complementa o autocomplete local com busca remota no mercado inteiro
     if (formData.category === 'fiat' && formData.market === 'estrangeiro') {
-      queueUsSearch(upper);
+      queueRemoteSearch(upper, searchUsStocks);   // Ações EUA → Yahoo Finance
+    } else if (formData.category === 'crypto') {
+      queueRemoteSearch(upper, searchCryptos);    // Cripto → CoinGecko /search
     }
   };
 
   const handleSelectSuggestion = async (asset: KnownAsset) => {
     setSuggestions([]);
+    setPickedCoingeckoId(asset.coingeckoId);
     setFormData(p=>({...p, symbol:asset.symbol, name:asset.name,
       category:asset.category, currency:asset.currency, market:asset.market, purchasePrice:''}));
     setFetchingPrice(true); setIsTypingPrice(false);
@@ -1638,6 +1657,7 @@ function AssetFormModal({
       quantity:      parseFloat(formData.quantity.replace(/,/g,'.')),
       purchasePrice: parseFloat(formData.purchasePrice.replace(/,/g,'.')),
       date:     formData.date,
+      coingeckoId: pickedCoingeckoId,
     });
   };
 
