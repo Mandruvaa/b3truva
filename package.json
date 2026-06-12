@@ -1,7 +1,7 @@
 {
   "name": "b3truva",
   "version": "1.0.0",
-  "homepage": "https://Mandruvaa.github.io/mandruva-invest",
+  "homepage": "https://Mandruvaa.github.io/b3truva",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
