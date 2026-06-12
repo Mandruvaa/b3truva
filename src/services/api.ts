@@ -286,45 +286,112 @@ export async function fetchHistoricalOHLC(
   return fetchYahooOHLC(yahooSym);
 }
 
-// ─── Market News (rss2json → Google News RSS) ─────────────────────────────────
+// ─── Market News (RSS direto → parser próprio) ────────────────────────────────
+// O rss2json gratuito passou a responder 422; agora buscamos o XML das fontes
+// diretamente (via proxy CORS na web) e parseamos com regex leve — funciona
+// igualmente no nativo, onde não há DOMParser.
 export type NewsArticle = {
   id:       string;
   title:    string;
   source:   string;
   url:      string;
-  pubDate:  string; // ISO or "YYYY-MM-DD HH:mm:ss"
+  pubDate:  string; // ISO
   imageUrl?: string;
 };
 
-const GNEWS_RSS =
-  'https://news.google.com/rss/search?q=mercado+financeiro+bolsa+criptomoedas&hl=pt-BR&gl=BR&ceid=BR:pt-BR';
+const NEWS_FEEDS = [
+  { url: 'https://www.infomoney.com.br/feed/',       source: 'InfoMoney' },
+  { url: 'https://portaldobitcoin.uol.com.br/feed/', source: 'Portal do Bitcoin' },
+];
 
-function parseGNewsTitle(raw: string): { title: string; source: string } {
-  const idx = raw.lastIndexOf(' - ');
-  if (idx > 0) return { title: raw.slice(0, idx).trim(), source: raw.slice(idx + 3).trim() };
-  return { title: raw, source: 'Notícias' };
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;|&#0?39;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
+}
+
+function firstTag(chunk: string, name: string): string {
+  const m = chunk.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, 'i'));
+  if (!m) return '';
+  return m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
+}
+
+// Imagem da matéria, em ordem de confiabilidade:
+// <enclosure url> → <media:content|thumbnail url> → primeira <img> do description/content
+function extractItemImage(chunk: string): string | undefined {
+  const enclosure = chunk.match(/<enclosure[^>]+url=["']([^"']+)["']/i)?.[1];
+  const media     = chunk.match(/<media:(?:content|thumbnail)[^>]+url=["']([^"']+)["']/i)?.[1];
+  const html      = decodeXmlEntities(firstTag(chunk, 'description') + firstTag(chunk, 'content:encoded'));
+  const inlineImg = html.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1];
+  const found = [enclosure, media, inlineImg].find(u => u && /^https?:\/\//.test(u));
+  return found ? decodeXmlEntities(found) : undefined;
+}
+
+function parseRssFeed(xml: string, source: string): NewsArticle[] {
+  return xml.split(/<item(?:\s[^>]*)?>/).slice(1).map((chunk, i) => {
+    const title   = decodeXmlEntities(firstTag(chunk, 'title').replace(/<[^>]+>/g, ''));
+    const link    = firstTag(chunk, 'link');
+    const rawDate = firstTag(chunk, 'pubDate');
+    const parsed  = new Date(rawDate);
+    return {
+      id:      firstTag(chunk, 'guid') || link || `${source}-${i}`,
+      title,
+      source,
+      url:     link,
+      pubDate: isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString(),
+      imageUrl: extractItemImage(chunk),
+    };
+  }).filter(a => a.title && a.url);
 }
 
 /**
- * Busca notícias financeiras via rss2json (converte RSS do Google News em JSON).
- * Gratuito, sem chave de API, CORS-friendly.
+ * Busca notícias financeiras direto dos feeds RSS das fontes.
+ * Feeds em paralelo; falha parcial não derruba o restante.
+ * Lança erro apenas se TODOS os feeds falharem (aciona o fallback mock da UI).
  */
 export async function fetchMarketNews(limit = 15): Promise<NewsArticle[]> {
-  const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(GNEWS_RSS)}&count=${limit}`;
-  const res  = await fetch(url);
-  if (!res.ok) throw new Error(`rss2json ${res.status}`);
-  const data = await res.json();
-  if (data.status !== 'ok') throw new Error('rss2json error');
+  const results = await Promise.allSettled(
+    NEWS_FEEDS.map(async (f) => {
+      const res = await fetch(corsUrl(f.url));
+      if (!res.ok) throw new Error(`RSS ${f.source} ${res.status}`);
+      return parseRssFeed(await res.text(), f.source);
+    })
+  );
+  const all = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+  if (!all.length) throw new Error('Nenhum feed de notícias disponível');
+  return all
+    .sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime())
+    .slice(0, limit);
+}
 
-  return (data.items as any[]).slice(0, limit).map((item: any, i: number) => {
-    const { title, source } = parseGNewsTitle(item.title ?? '');
-    return {
-      id:       item.guid || item.link || String(i),
-      title,
-      source,
-      url:      item.link ?? '',
-      pubDate:  item.pubDate ?? new Date().toISOString(),
-      imageUrl: item.thumbnail || undefined,
-    };
-  });
+// ─── Busca de ativos EUA (Yahoo Finance Search) ───────────────────────────────
+/**
+ * Autocomplete de ações/ETFs americanos via Yahoo Finance Search.
+ * Retorna no formato KnownAsset para plugar direto nas sugestões do formulário.
+ */
+export async function searchUsStocks(query: string): Promise<KnownAsset[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  try {
+    const url = corsUrl(
+      `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0&listsCount=0`
+    );
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Yahoo search ${res.status}`);
+    const data = await res.json();
+    const quotes: any[] = data?.quotes ?? [];
+    return quotes
+      .filter(it => it?.symbol && (it.quoteType === 'EQUITY' || it.quoteType === 'ETF'))
+      .map(it => ({
+        symbol:   it.symbol as string,
+        name:     (it.shortname || it.longname || it.symbol) as string,
+        category: 'fiat' as const,
+        currency: 'USD' as const,
+        market:   'estrangeiro' as const,
+      }));
+  } catch (e) {
+    console.log('Erro na busca Yahoo (EUA):', e);
+    return [];
+  }
 }

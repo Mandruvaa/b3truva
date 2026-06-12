@@ -19,9 +19,10 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 import { KnownAsset, KNOWN_ASSETS, searchAssets } from '../data/knownAssets';
-import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
+import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, searchUsStocks, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
 import { analyzeAsset, AIAnalysis } from '../services/ai';
 import Svg, { Path, Rect, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
+import { Feather } from '@expo/vector-icons';
 import TradingViewChart from '../components/TradingViewChart';
 
 // Logo oficial B3truva (wordmark "B3" azul-marinho + "TRUVA" dourado)
@@ -1232,10 +1233,10 @@ function Sidebar({
 }) {
   const [tooltip, setTooltip] = useState(false);
 
-  const navItems = [
-    { icon:'⌂', title:'Início',    active: activeView === 'dashboard', onPress: onHome     },
-    { icon:'📊', title:'Carteira', active: activeView === 'carteira',  onPress: onCarteira },
-    { icon:'📰', title:'Hub IA',   active: activeView === 'noticias',  onPress: onNoticias },
+  const navItems: { icon: keyof typeof Feather.glyphMap; title: string; active: boolean; onPress: () => void }[] = [
+    { icon:'home',      title:'Início',   active: activeView === 'dashboard', onPress: onHome     },
+    { icon:'pie-chart', title:'Carteira', active: activeView === 'carteira',  onPress: onCarteira },
+    { icon:'cpu',       title:'Hub IA',   active: activeView === 'noticias',  onPress: onNoticias },
   ];
 
   return (
@@ -1245,18 +1246,25 @@ function Sidebar({
         <Image source={B3TRUVA_LOGO} style={s.sidebarLogoImg} resizeMode="contain" />
       </View>
 
-      {/* Nav items */}
+      {/* Nav items — dourado quando ativo ou em hover */}
       <View style={s.sidebarNav}>
         {navItems.map((item, i) => (
-          <TouchableOpacity
+          <Pressable
             key={i}
-            style={[s.sidebarItem, item.active && s.sidebarItemActive]}
+            style={({ hovered }: any) => [
+              s.sidebarItem,
+              (item.active || hovered) && s.sidebarItemActive,
+            ]}
             onPress={item.onPress}
           >
-            <Text style={[s.sidebarIcon, !item.active && s.sidebarIconInactive]}>
-              {item.icon}
-            </Text>
-          </TouchableOpacity>
+            {({ hovered }: any) => (
+              <Feather
+                name={item.icon}
+                size={20}
+                color={item.active || hovered ? C.GOLD : C.TEXT_MUTED}
+              />
+            )}
+          </Pressable>
         ))}
 
         {/* ── CTA: Investir / Monitorar ── */}
@@ -1267,7 +1275,7 @@ function Sidebar({
             onHoverIn={() => setTooltip(true)}
             onHoverOut={() => setTooltip(false)}
           >
-            <Text style={s.sidebarAddBtnText}>+</Text>
+            <Feather name="plus" size={22} color={C.GOLD_DARK} />
           </Pressable>
           {tooltip && (
             <View style={s.sidebarTooltip}>
@@ -1280,12 +1288,16 @@ function Sidebar({
 
       {/* Bottom items */}
       <View style={s.sidebarBottom}>
-        <TouchableOpacity style={s.sidebarItem} onPress={onSettings}>
-          <Text style={s.sidebarIconDim}>⚙</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.sidebarItem} onPress={onLogout}>
-          <Text style={s.sidebarIconDim}>→</Text>
-        </TouchableOpacity>
+        <Pressable style={s.sidebarItem} onPress={onSettings}>
+          {({ hovered }: any) => (
+            <Feather name="settings" size={19} color={hovered ? C.GOLD : '#8A8A8A'} />
+          )}
+        </Pressable>
+        <Pressable style={s.sidebarItem} onPress={onLogout}>
+          {({ hovered }: any) => (
+            <Feather name="log-out" size={19} color={hovered ? C.GOLD : '#8A8A8A'} />
+          )}
+        </Pressable>
       </View>
     </View>
   );
@@ -1304,12 +1316,12 @@ function MobileNavBar({
   onSettings: () => void;
   activeView: ActiveView;
 }) {
-  const items = [
-    { icon:'⌂',  label:'Início',   active: activeView === 'dashboard', onPress: onHome,     cta:false },
-    { icon:'📊', label:'Carteira', active: activeView === 'carteira',  onPress: onCarteira, cta:false },
-    { icon:'+',  label:'',         active: activeView === 'investir',  onPress: onInvestir, cta:true  },
-    { icon:'📰', label:'Hub IA',   active: activeView === 'noticias',  onPress: onNoticias, cta:false },
-    { icon:'⚙',  label:'Ajustes',  active: false,                      onPress: onSettings, cta:false },
+  const items: { icon: keyof typeof Feather.glyphMap; label: string; active: boolean; onPress: () => void; cta: boolean }[] = [
+    { icon:'home',      label:'Início',   active: activeView === 'dashboard', onPress: onHome,     cta:false },
+    { icon:'pie-chart', label:'Carteira', active: activeView === 'carteira',  onPress: onCarteira, cta:false },
+    { icon:'plus',      label:'',         active: activeView === 'investir',  onPress: onInvestir, cta:true  },
+    { icon:'cpu',       label:'Hub IA',   active: activeView === 'noticias',  onPress: onNoticias, cta:false },
+    { icon:'settings',  label:'Ajustes',  active: false,                      onPress: onSettings, cta:false },
   ];
   return (
     <View style={s.mobileNavBar}>
@@ -1317,13 +1329,13 @@ function MobileNavBar({
         <TouchableOpacity key={i} activeOpacity={0.85}
           style={[s.mobileNavAddBtn, item.active && s.mobileNavAddBtnActive]}
           onPress={item.onPress}>
-          <Text style={s.mobileNavAddBtnText}>+</Text>
+          <Feather name="plus" size={24} color={C.GOLD_DARK} />
         </TouchableOpacity>
       ) : (
         <TouchableOpacity key={i}
           style={[s.mobileNavItem, item.active && s.mobileNavItemActive]}
           onPress={item.onPress}>
-          <Text style={[s.mobileNavIcon, !item.active && s.mobileNavIconInactive]}>{item.icon}</Text>
+          <Feather name={item.icon} size={20} color={item.active ? C.GOLD : C.TEXT_MUTED} />
           <Text style={[s.mobileNavLabel, item.active && s.mobileNavLabelActive]}>{item.label}</Text>
         </TouchableOpacity>
       ))}
@@ -1547,6 +1559,25 @@ function AssetFormModal({
     setFormData(p=>({...p, currency:cur, purchasePrice:np.toFixed(2)}));
   };
 
+  // Busca remota Yahoo (Ações EUA) com debounce e guarda contra resposta velha
+  const usSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const usSearchQuery = useRef('');
+  useEffect(() => () => { if (usSearchTimer.current) clearTimeout(usSearchTimer.current); }, []);
+
+  const queueUsSearch = (query: string) => {
+    usSearchQuery.current = query;
+    if (usSearchTimer.current) clearTimeout(usSearchTimer.current);
+    if (query.length < 2) return;
+    usSearchTimer.current = setTimeout(async () => {
+      const remote = await searchUsStocks(query);
+      if (usSearchQuery.current !== query || !remote.length) return;
+      setSuggestions(prev => {
+        const seen = new Set(prev.map(a => a.symbol));
+        return [...prev, ...remote.filter(a => !seen.has(a.symbol))].slice(0, 8);
+      });
+    }, 350);
+  };
+
   const handleTickerChange = (text: string) => {
     const upper = text.toUpperCase().trim();
     // Auto-corrige mercado/moeda quando o ticker bate exatamente com um ativo conhecido
@@ -1570,6 +1601,10 @@ function AssetFormModal({
     }
     setFormData(p => ({ ...p, symbol: text }));
     setSuggestions(upper.length >= 1 ? searchAssets(text) : []);
+    // Ações EUA: complementa o autocomplete local com a busca do Yahoo Finance
+    if (formData.category === 'fiat' && formData.market === 'estrangeiro') {
+      queueUsSearch(upper);
+    }
   };
 
   const handleSelectSuggestion = async (asset: KnownAsset) => {
@@ -2438,8 +2473,6 @@ const s = StyleSheet.create({
   },
   mobileNavItem:         { alignItems:'center', justifyContent:'center', minWidth:56, paddingVertical:4, paddingHorizontal:6, borderRadius:12 },
   mobileNavItemActive:   { backgroundColor:C.GOLD_DIM },
-  mobileNavIcon:         { fontSize:20, color:C.GOLD },
-  mobileNavIconInactive: { color:C.TEXT_MUTED },
   mobileNavLabel:        { fontSize:9, fontWeight:'600', color:C.TEXT_MUTED, marginTop:2 },
   mobileNavLabelActive:  { color:C.GOLD },
   mobileNavAddBtn: {
@@ -2450,7 +2483,6 @@ const s = StyleSheet.create({
     shadowOpacity:0.5, shadowRadius:10, elevation:6,
   },
   mobileNavAddBtnActive: { backgroundColor:C.GOLD_LIGHT },
-  mobileNavAddBtnText:   { color:C.GOLD_DARK, fontSize:24, fontWeight:'700', lineHeight:26 },
 
   // ── Sidebar ──
   sidebar: {
@@ -2468,9 +2500,6 @@ const s = StyleSheet.create({
   sidebarBottom:        { alignItems:'center', gap:6 },
   sidebarItem:          { width:44, height:44, borderRadius:10, alignItems:'center', justifyContent:'center' },
   sidebarItemActive:    { backgroundColor:C.GOLD_DIM },
-  sidebarIcon:          { fontSize:20, color:C.GOLD },
-  sidebarIconInactive:  { fontSize:20, color:C.TEXT_MUTED },
-  sidebarIconDim:       { fontSize:20, color:'#8A8A8A' },
 
   // CTA add button in sidebar
   sidebarAddWrapper:    { position:'relative' as any, alignItems:'center' },
@@ -2484,7 +2513,6 @@ const s = StyleSheet.create({
     backgroundColor:C.GOLD_LIGHT,
     shadowOpacity:0.7,
   },
-  sidebarAddBtnText: { color:C.GOLD_DARK, fontSize:20, fontWeight:'800', lineHeight:20, textAlign:'center', includeFontPadding:false },
   sidebarTooltip: {
     position:'absolute' as any, left:52, top:8,
     backgroundColor:'#333', borderRadius:8,
