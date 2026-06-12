@@ -1,27 +1,37 @@
 @AGENTS.md
 
-## Regras de Design — Mandruva Invest
+## Regras de Design — B3truva
 
-### Ultra Dark Mode (obrigatório em toda nova tela/componente)
+### Ultra Dark Mode com elevação (obrigatório em toda nova tela/componente)
 
 ```ts
 const C = {
   BG:            '#121212',   // fundo principal
   SIDEBAR:       '#0A0A0A',   // barra lateral
-  CARD:          '#1C1C1C',   // cards primários
+  CARD:          '#1C1C1C',   // cards primários (superfícies elevadas usam #1E1E21)
   CARD2:         '#242424',   // cards secundários / painéis internos
   INPUT:         '#252525',   // campos de texto
-  ORANGE:        '#FF6B00',   // destaque principal (botões, ícones ativos, veredito COMPRAR)
+  GOLD:          '#D9B36C',   // acento principal B3truva (botões, ativos, foco, glow)
+  GOLD_LIGHT:    '#E8C87E',   // hover/pressed de superfícies douradas
+  GOLD_DARK:     '#1E1606',   // texto sobre superfícies douradas
+  ORANGE:        '#FF6B00',   // legado/charts (SMA16) — não usar em novos CTAs
   TEXT:          '#F2F2F2',   // texto principal
   TEXT_SUB:      '#A0A0A0',   // texto secundário / labels
   TEXT_MUTED:    '#525252',   // texto terciário / placeholders
   BORDER:        '#282828',   // bordas de separação
+  EDGE:          'rgba(255,255,255,0.06)',  // borda translúcida de cards elevados
   GREEN:         '#4ade80',   // positivo / COMPRAR
   RED:           '#f87171',   // negativo / VENDER
   YELLOW:        '#fbbf24',   // neutro / MANTER
   BLUE:          '#60a5fa',   // EUA / BDR / SMA28
 };
 ```
+
+**Profundidade:** cards elevados usam fundo `#1E1E21`, borda `C.EDGE` e sombra
+(`shadowColor:'#000'`, opacity ~0.35, radius 8–14). Botões principais são dourados
+(`C.GOLD` com texto `C.GOLD_DARK`) e carregam glow (`shadowColor:C.GOLD`).
+O logo (`assets/B3truva.png`) tem "B3" azul-marinho — sobre fundos escuros,
+exibi-lo dentro de chip claro ou sobre gradiente com tom médio.
 
 ### Tipografia Fintech
 

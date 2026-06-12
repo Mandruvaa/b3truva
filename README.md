@@ -1,8 +1,8 @@
-# Mandruva Invest
+# B3truva
 
 Aplicativo pessoal de gerenciamento de portfólio para Bolsa, Criptomoedas e mercado estrangeiro, construído com **Expo SDK 54 · React Native · TypeScript**.
 
-Design visual inspirado no **Itaú íon** — Ultra Dark Mode, destaques em laranja vibrante, tipografia fintech.
+Design visual inspirado no **Itaú íon** — Ultra Dark Mode com elevação, acento dourado B3truva, tipografia fintech.
 
 ---
 

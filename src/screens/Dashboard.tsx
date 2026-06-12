@@ -12,6 +12,8 @@ import {
   Platform,
   ActivityIndicator,
   Animated,
+  Image,
+  Linking,
   useWindowDimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -19,8 +21,11 @@ import { Calendar } from 'react-native-calendars';
 import { KnownAsset, KNOWN_ASSETS, searchAssets } from '../data/knownAssets';
 import { fetchPortfolioPrices, fetchAssetPrice, fetchDollarRate, fetchHistoricalOHLC, fetchMarketNews, NewsArticle, PriceMap, CryptoPriceMap, BrazilianStockMap, DollarRateResult, DOLLAR_RATE_FALLBACK } from '../services/api';
 import { analyzeAsset, AIAnalysis } from '../services/ai';
-import Svg, { Path, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
+import Svg, { Path, Rect, Defs, LinearGradient as SVGGradient, Stop } from 'react-native-svg';
 import TradingViewChart from '../components/TradingViewChart';
+
+// Logo oficial B3truva (wordmark "B3" azul-marinho + "TRUVA" dourado)
+const B3TRUVA_LOGO = require('../../assets/B3truva.png');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Category   = 'fiat' | 'crypto';
@@ -38,7 +43,8 @@ interface Asset {
 }
 interface NewsItem {
   id: string; title: string; source: string; time: string;
-  keywords: string[]; bgColor: string; emoji: string; imageUrl?: string;
+  keywords: string[]; bgColor: string; emoji: string;
+  imageUrl?: string; url?: string;
 }
 interface PresetFields {
   category: Category; currency: Currency; market: Market;
@@ -54,6 +60,15 @@ const C = {
   ORANGE:        '#FF6B00',
   ORANGE_DIM:    'rgba(255,107,0,0.13)',
   ORANGE_BORDER: 'rgba(255,107,0,0.45)',
+  // Acento dourado B3truva (amostrado do gradiente do logo)
+  GOLD:          '#D9B36C',
+  GOLD_LIGHT:    '#E8C87E',
+  GOLD_DARK:     '#1E1606',   // texto sobre superfícies douradas
+  GOLD_DIM:      'rgba(217,179,108,0.13)',
+  GOLD_BORDER:   'rgba(217,179,108,0.5)',
+  // Bordas de profundidade semi-transparentes (Ultra Dark com elevação)
+  EDGE:          'rgba(255,255,255,0.06)',
+  EDGE_SOFT:     'rgba(255,255,255,0.03)',
   TEXT:          '#F2F2F2',
   TEXT_SUB:      '#A0A0A0',
   TEXT_MUTED:    '#525252',
@@ -75,6 +90,7 @@ const C = {
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+// NÃO renomear: chave legada do AsyncStorage — mudar apagaria carteiras já salvas
 const STORAGE_KEY = '@mandruva_invest_assets';
 const MONTHS_PT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const AI_PHRASES = ['Acessando dados de mercado...','Avaliando notícias recentes...','Calculando tendências...','Cruzando indicadores técnicos...'];
@@ -251,6 +267,7 @@ function articleToNewsItem(a: NewsArticle): NewsItem {
     bgColor:  newsBgColor(a.title),
     emoji:    newsEmoji(a.title),
     imageUrl: a.imageUrl,
+    url:      a.url || undefined,
   };
 }
 
@@ -501,11 +518,11 @@ const ct = StyleSheet.create({
   },
   slider: {
     position: 'absolute' as any, top: PILL_PAD, bottom: PILL_PAD,
-    borderRadius: 17, backgroundColor: C.ORANGE,
+    borderRadius: 17, backgroundColor: C.GOLD,
   },
   side:        { flex: 1, paddingVertical: 5, alignItems: 'center', zIndex: 1 },
   label:       { color: C.TEXT_MUTED, fontSize: 11, fontWeight: '700' },
-  labelActive: { color: '#fff' },
+  labelActive: { color: C.GOLD_DARK },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -571,7 +588,7 @@ function InvestirView({
       {/* ── Promo Banner ── */}
       <View style={s.vtBanner}>
         <View style={s.vtBannerLeft}>
-          <Text style={s.vtBannerTag}>MANDRUVA INVEST</Text>
+          <Text style={s.vtBannerTag}>B3TRUVA</Text>
           <Text style={s.vtBannerTitle}>Invista com taxa zero de corretagem e poucos cliques</Text>
           <Text style={s.vtBannerSub}>
             Monitore ações, criptomoedas e fundos em um só lugar — cotações ao vivo e análise por IA.
@@ -611,7 +628,7 @@ function InvestirView({
       {/* ── Rail: Carteira Top 5 ── */}
       <View style={[s.vtSectionHead, { marginTop: 36 }]}>
         <Text style={s.vtSectionTitle}>Carteira Top 5</Text>
-        <Text style={s.vtSectionSub}>As cinco ações preferidas pelos estrategistas da Mandruva</Text>
+        <Text style={s.vtSectionSub}>As cinco ações preferidas pelos estrategistas da B3truva</Text>
       </View>
 
       <DragRail contentContainerStyle={s.vtRailContent} style={s.vtRail}>
@@ -1223,9 +1240,9 @@ function Sidebar({
 
   return (
     <View style={s.sidebar}>
-      {/* Logo */}
+      {/* Logo B3truva (chip claro para legibilidade do "B3" azul-marinho) */}
       <View style={s.sidebarLogo}>
-        <Text style={s.sidebarLogoText}>M</Text>
+        <Image source={B3TRUVA_LOGO} style={s.sidebarLogoImg} resizeMode="contain" />
       </View>
 
       {/* Nav items */}
@@ -1315,20 +1332,59 @@ function MobileNavBar({
 }
 
 // ─── NewsCard ─────────────────────────────────────────────────────────────────
-const NewsCard = React.memo(function NewsCard({ item }: { item: NewsItem }) {
+// Clicável (abre a matéria original em nova aba) com fallback elegante de
+// imagem: gradiente escuro + logo B3truva quando o RSS não envia thumbnail.
+function NewsImageFallback() {
   return (
-    <View style={s.newsCard}>
-      <View style={[s.newsImgArea, { backgroundColor: item.bgColor }]}>
-        <Text style={s.newsEmoji}>{item.emoji}</Text>
-      </View>
+    <View style={s.newsImgArea}>
+      <Svg width="100%" height="100%" style={StyleSheet.absoluteFill as any}>
+        <Defs>
+          <SVGGradient id="newsFallbackGrad" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#23262E" />
+            <Stop offset="1" stopColor="#0D0F14" />
+          </SVGGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#newsFallbackGrad)" />
+      </Svg>
+      <Image source={B3TRUVA_LOGO} style={s.newsFallbackLogo} resizeMode="contain" />
+    </View>
+  );
+}
+
+const NewsCard = React.memo(function NewsCard({ item }: { item: NewsItem }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage = !!item.imageUrl && !imgFailed;
+
+  const openArticle = () => {
+    if (!item.url) return;
+    if (Platform.OS === 'web') (window as any).open(item.url, '_blank', 'noopener');
+    else Linking.openURL(item.url).catch(() => {});
+  };
+
+  return (
+    <Pressable
+      onPress={openArticle}
+      disabled={!item.url}
+      style={(state: any) => [s.newsCard, item.url && state.hovered && s.newsCardHover]}
+    >
+      {showImage ? (
+        <Image
+          source={{ uri: item.imageUrl! }}
+          style={s.newsImgArea}
+          resizeMode="cover"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <NewsImageFallback />
+      )}
       <View style={s.newsCardBody}>
         <Text style={s.newsCardTitle} numberOfLines={3}>{item.title}</Text>
         <View style={s.newsCardFooter}>
           <Text style={s.newsSource}>{item.source}</Text>
-          <Text style={s.newsTime}>{item.time}</Text>
+          <Text style={s.newsTime}>{item.url ? '↗  ' : ''}{item.time}</Text>
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 });
 
@@ -1722,11 +1778,11 @@ function AssetFormModal({
                         );
                       }}
                       onDayPress={day=>{ setFormData(p=>({...p,date:day.dateString})); setCalendarVisible(false); }}
-                      markedDates={{[formData.date]:{selected:true,selectedColor:C.ORANGE}}}
+                      markedDates={{[formData.date]:{selected:true,selectedColor:C.GOLD}}}
                       theme={{ backgroundColor:C.CARD, calendarBackground:C.CARD, textSectionTitleColor:C.TEXT_SUB,
-                        textSectionTitleDisabledColor:C.TEXT_MUTED, selectedDayBackgroundColor:C.ORANGE,
-                        selectedDayTextColor:'#fff', todayTextColor:C.ORANGE, dayTextColor:C.TEXT,
-                        textDisabledColor:C.TEXT_MUTED, arrowColor:C.ORANGE, monthTextColor:C.TEXT, indicatorColor:C.ORANGE }}
+                        textSectionTitleDisabledColor:C.TEXT_MUTED, selectedDayBackgroundColor:C.GOLD,
+                        selectedDayTextColor:C.GOLD_DARK, todayTextColor:C.GOLD, dayTextColor:C.TEXT,
+                        textDisabledColor:C.TEXT_MUTED, arrowColor:C.GOLD, monthTextColor:C.TEXT, indicatorColor:C.GOLD }}
                     />
                     <TouchableOpacity style={s.calendarCloseBtn} onPress={()=>setCalendarVisible(false)}>
                       <Text style={s.calendarCloseBtnText}>Fechar</Text>
@@ -2243,7 +2299,7 @@ export default function Dashboard() {
 
               <View style={[s.card, !isMobile && s.investirCard, isMobile && s.cardStacked]}>
                 <View style={s.cardHeader}>
-                  <Text style={[s.cardTitle,{color:C.ORANGE}]}>+ Investir</Text>
+                  <Text style={[s.cardTitle,{color:C.GOLD}]}>+ Investir</Text>
                 </View>
                 <Text style={s.investirSubtitle}>Diversifique sua carteira</Text>
                 {INVEST_CATEGORIES.map(cat=>(
@@ -2299,7 +2355,7 @@ export default function Dashboard() {
               { icon:'🔔', label:'Notificações',          value:'Ativado'  },
               { icon:'🔒', label:'Privacidade',           value:''         },
               { icon:'🎨', label:'Tema',                  value:'Escuro'   },
-              { icon:'ℹ️',  label:'Sobre o Mandruva',     value:'v1.0.0'  },
+              { icon:'ℹ️',  label:'Sobre o B3truva',      value:'v1.0.0'  },
             ] as const).map((row, i) => (
               <TouchableOpacity key={i} style={s.settingsRow} activeOpacity={0.7}>
                 <Text style={s.settingsRowIcon}>{row.icon}</Text>
@@ -2381,18 +2437,20 @@ const s = StyleSheet.create({
     paddingTop:6, paddingBottom:10, paddingHorizontal:8,
   },
   mobileNavItem:         { alignItems:'center', justifyContent:'center', minWidth:56, paddingVertical:4, paddingHorizontal:6, borderRadius:12 },
-  mobileNavItemActive:   { backgroundColor:C.ORANGE_DIM },
-  mobileNavIcon:         { fontSize:20, color:C.ORANGE },
+  mobileNavItemActive:   { backgroundColor:C.GOLD_DIM },
+  mobileNavIcon:         { fontSize:20, color:C.GOLD },
   mobileNavIconInactive: { color:C.TEXT_MUTED },
   mobileNavLabel:        { fontSize:9, fontWeight:'600', color:C.TEXT_MUTED, marginTop:2 },
-  mobileNavLabelActive:  { color:C.ORANGE },
+  mobileNavLabelActive:  { color:C.GOLD },
   mobileNavAddBtn: {
-    width:48, height:48, borderRadius:24, backgroundColor:C.ORANGE,
+    width:48, height:48, borderRadius:24, backgroundColor:C.GOLD,
     alignItems:'center', justifyContent:'center', marginTop:-22,
     borderWidth:3, borderColor:C.BG,
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:3},
+    shadowOpacity:0.5, shadowRadius:10, elevation:6,
   },
-  mobileNavAddBtnActive: { backgroundColor:'#FF8A3D' },
-  mobileNavAddBtnText:   { color:'#fff', fontSize:24, fontWeight:'700', lineHeight:26 },
+  mobileNavAddBtnActive: { backgroundColor:C.GOLD_LIGHT },
+  mobileNavAddBtnText:   { color:C.GOLD_DARK, fontSize:24, fontWeight:'700', lineHeight:26 },
 
   // ── Sidebar ──
   sidebar: {
@@ -2401,15 +2459,16 @@ const s = StyleSheet.create({
     overflow:'visible' as any, zIndex:10,
   },
   sidebarLogo: {
-    width:36, height:36, borderRadius:8, backgroundColor:C.ORANGE,
+    width:60, height:30, borderRadius:8, backgroundColor:'#Eef0f4',
     alignItems:'center', justifyContent:'center', marginBottom:24,
+    paddingHorizontal:5, borderWidth:1, borderColor:C.GOLD_BORDER,
   },
-  sidebarLogoText:      { color:'#fff', fontSize:16, fontWeight:'800' },
+  sidebarLogoImg:       { width:'100%' as any, height:'100%' as any },
   sidebarNav:           { flex:1, alignItems:'center', gap:6 },
   sidebarBottom:        { alignItems:'center', gap:6 },
   sidebarItem:          { width:44, height:44, borderRadius:10, alignItems:'center', justifyContent:'center' },
-  sidebarItemActive:    { backgroundColor:C.ORANGE_DIM },
-  sidebarIcon:          { fontSize:20, color:C.ORANGE },
+  sidebarItemActive:    { backgroundColor:C.GOLD_DIM },
+  sidebarIcon:          { fontSize:20, color:C.GOLD },
   sidebarIconInactive:  { fontSize:20, color:C.TEXT_MUTED },
   sidebarIconDim:       { fontSize:20, color:'#8A8A8A' },
 
@@ -2417,15 +2476,15 @@ const s = StyleSheet.create({
   sidebarAddWrapper:    { position:'relative' as any, alignItems:'center' },
   sidebarAddBtn: {
     width:40, height:40, borderRadius:20,
-    backgroundColor:C.ORANGE, alignItems:'center', justifyContent:'center',
-    shadowColor:C.ORANGE, shadowOffset:{width:0,height:4},
-    shadowOpacity:0.4, shadowRadius:8, elevation:6,
+    backgroundColor:C.GOLD, alignItems:'center', justifyContent:'center',
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:4},
+    shadowOpacity:0.45, shadowRadius:10, elevation:6,
   },
   sidebarAddBtnActive: {
-    backgroundColor:'#CC5500',
-    shadowOpacity:0.6,
+    backgroundColor:C.GOLD_LIGHT,
+    shadowOpacity:0.7,
   },
-  sidebarAddBtnText: { color:'#fff', fontSize:20, fontWeight:'800', lineHeight:20, textAlign:'center', includeFontPadding:false },
+  sidebarAddBtnText: { color:C.GOLD_DARK, fontSize:20, fontWeight:'800', lineHeight:20, textAlign:'center', includeFontPadding:false },
   sidebarTooltip: {
     position:'absolute' as any, left:52, top:8,
     backgroundColor:'#333', borderRadius:8,
@@ -2454,10 +2513,17 @@ const s = StyleSheet.create({
     borderBottomWidth:1, borderBottomColor:C.BORDER,
   },
   newsColumnTitle: { color:C.TEXT, fontSize:15, fontWeight:'700' },
-  newsRefresh:     { color:C.TEXT_MUTED, fontSize:18 },
+  newsRefresh:     { color:C.GOLD, fontSize:18 },
   newsList:        { padding:12, gap:10 },
-  newsCard: { backgroundColor:C.CARD, borderRadius:12, overflow:'hidden', borderWidth:1, borderColor:C.BORDER },
-  newsImgArea:     { height:88, alignItems:'center', justifyContent:'center' },
+  newsCard: {
+    backgroundColor:'#1F1F23', borderRadius:12, overflow:'hidden',
+    borderWidth:1, borderColor:C.EDGE_SOFT,
+    shadowColor:'#000', shadowOffset:{width:0,height:3},
+    shadowOpacity:0.3, shadowRadius:8, elevation:3,
+  },
+  newsCardHover:   { borderColor:C.GOLD_BORDER },
+  newsImgArea:     { height:88, width:'100%' as any, alignItems:'center', justifyContent:'center' },
+  newsFallbackLogo:{ width:'62%' as any, height:26, opacity:0.92 },
   newsEmoji:       { fontSize:32 },
   newsCardBody:    { padding:10 },
   newsCardTitle:   { color:C.TEXT, fontSize:12, fontWeight:'600', lineHeight:18, marginBottom:6 },
@@ -2470,13 +2536,18 @@ const s = StyleSheet.create({
   mainContent:       { padding:24, gap:16, paddingBottom:48, maxWidth:1200, width:'100%' as any, alignSelf:'center' as any },
   mainContentMobile: { padding:12, gap:12, paddingBottom:32 },
 
-  // ── Generic card ──
-  card:       { backgroundColor:C.CARD, borderRadius:16, padding:20, borderWidth:1, borderColor:C.BORDER },
+  // ── Generic card (elevação: tom mais claro + borda translúcida + sombra) ──
+  card: {
+    backgroundColor:'#1E1E21', borderRadius:16, padding:20,
+    borderWidth:1, borderColor:C.EDGE,
+    shadowColor:'#000', shadowOffset:{width:0,height:6},
+    shadowOpacity:0.35, shadowRadius:14, elevation:5,
+  },
   cardMobile: { padding:14 },
   cardHeader:     { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 },
   cardHeaderWrap: { flexWrap:'wrap', gap:10 },
   cardTitleRow:    { flexDirection:'row', alignItems:'center', gap:6 },
-  cardTitleIcon:   { color:C.ORANGE, fontSize:13, fontWeight:'700' },
+  cardTitleIcon:   { color:C.GOLD, fontSize:13, fontWeight:'700' },
   cardTitle:       { color:C.TEXT, fontSize:15, fontWeight:'700' },
   cardArrow:       { color:C.TEXT_MUTED, fontSize:14 },
   marketStatusRow: { flexDirection:'row', alignItems:'center', gap:6, marginTop:4 },
@@ -2485,17 +2556,21 @@ const s = StyleSheet.create({
   cardHeaderActions:{ flexDirection:'row', gap:8, alignItems:'center' },
   filterToggleBtn: { paddingHorizontal:12, paddingVertical:7, borderRadius:8, backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT },
   filterToggleBtnText: { color:C.TEXT_SUB, fontSize:12, fontWeight:'600' },
-  addBtn:          { paddingHorizontal:14, paddingVertical:7, borderRadius:8, backgroundColor:C.ORANGE },
-  addBtnText:      { color:'#fff', fontSize:12, fontWeight:'700' },
+  addBtn: {
+    paddingHorizontal:14, paddingVertical:7, borderRadius:8, backgroundColor:C.GOLD,
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:2},
+    shadowOpacity:0.45, shadowRadius:9, elevation:4,
+  },
+  addBtnText:      { color:C.GOLD_DARK, fontSize:12, fontWeight:'800' },
 
   // ── Filter panel ──
   filterPanel: { backgroundColor:C.CARD2, borderRadius:10, padding:12, marginBottom:16, gap:10 },
   filterInput: { backgroundColor:C.INPUT, borderRadius:8, paddingHorizontal:12, paddingVertical:9, color:C.TEXT, borderWidth:1, borderColor:C.BORDER_LIGHT, fontSize:13 },
   filterRow:   { flexDirection:'row', flexWrap:'wrap', gap:8 },
   filterTab:   { paddingHorizontal:12, paddingVertical:7, borderRadius:8, backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT },
-  filterTabActive:     { backgroundColor:C.ORANGE_DIM, borderColor:C.ORANGE_BORDER },
+  filterTabActive:     { backgroundColor:C.GOLD_DIM, borderColor:C.GOLD_BORDER },
   filterTabText:       { color:C.TEXT_SUB, fontSize:11, fontWeight:'600' },
-  filterTabTextActive: { color:C.ORANGE },
+  filterTabTextActive: { color:C.GOLD },
 
   // ── Table ──
   tableSubtitle: { color:C.TEXT_MUTED, fontSize:12, marginBottom:12 },
@@ -2516,8 +2591,12 @@ const s = StyleSheet.create({
   rowActionIcon: { fontSize:13 },
   emptyTableBox: { paddingVertical:32, alignItems:'center', gap:16 },
   emptyTableText:{ color:C.TEXT_MUTED, fontSize:13, textAlign:'center', maxWidth:320 },
-  emptyAddBtn:   { paddingHorizontal:20, paddingVertical:11, borderRadius:10, backgroundColor:C.ORANGE },
-  emptyAddBtnText:{ color:'#fff', fontSize:13, fontWeight:'700' },
+  emptyAddBtn: {
+    paddingHorizontal:20, paddingVertical:11, borderRadius:10, backgroundColor:C.GOLD,
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:2},
+    shadowOpacity:0.45, shadowRadius:10, elevation:4,
+  },
+  emptyAddBtnText:{ color:C.GOLD_DARK, fontSize:13, fontWeight:'800' },
 
   // ── Bottom row ──
   bottomRow:       { flexDirection:'row', gap:16 },
@@ -2560,10 +2639,14 @@ const s = StyleSheet.create({
   formLabel: { color:C.TEXT_SUB, fontSize:12, fontWeight:'600', marginBottom:6, marginTop:16 },
   formInput: { backgroundColor:C.INPUT, borderRadius:10, paddingHorizontal:14, paddingVertical:12, color:C.TEXT, borderWidth:1, borderColor:C.BORDER_LIGHT, fontSize:15 },
   formInputDisabled: { backgroundColor:'#1A1A1A', color:C.TEXT_MUTED, borderColor:C.BORDER },
-  formInputFetching: { borderColor:C.ORANGE_BORDER, backgroundColor:'#1F1A14' },
-  formInputFocused:  { borderColor:C.ORANGE, borderWidth:1.5 },
+  formInputFetching: { borderColor:C.GOLD_BORDER, backgroundColor:'#1F1B12' },
+  formInputFocused:  {
+    borderColor:C.GOLD, borderWidth:1.5,
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:0},
+    shadowOpacity:0.35, shadowRadius:8, elevation:0,
+  },
   formLabelRow:      { flexDirection:'row', alignItems:'baseline', gap:10, marginBottom:8, marginTop:16 },
-  fetchingHint:      { color:C.ORANGE, fontSize:11, fontStyle:'italic' },
+  fetchingHint:      { color:C.GOLD, fontSize:11, fontStyle:'italic' },
 
   // Preset badge
   presetBadge: {
@@ -2578,9 +2661,9 @@ const s = StyleSheet.create({
   dateInput:     { flex:1, backgroundColor:C.INPUT, borderRadius:10, borderWidth:1, borderColor:C.BORDER_LIGHT },
   dateInputText: { paddingHorizontal:14, paddingVertical:12, color:C.TEXT, fontSize:15 },
   todayBtn:      { paddingVertical:12, paddingHorizontal:16, borderRadius:10, backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT, alignItems:'center', justifyContent:'center' },
-  todayBtnActive:     { backgroundColor:C.ORANGE, borderColor:C.ORANGE },
+  todayBtnActive:     { backgroundColor:C.GOLD, borderColor:C.GOLD },
   todayBtnText:       { color:C.TEXT_SUB, fontSize:13, fontWeight:'700' },
-  todayBtnTextActive: { color:'#fff' },
+  todayBtnTextActive: { color:C.GOLD_DARK },
 
   calendarOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.75)', justifyContent:'center', alignItems:'center' },
   calendarBox:     { backgroundColor:C.CARD, borderRadius:20, padding:20, width:'90%', maxWidth:500, borderWidth:1, borderColor:C.BORDER_LIGHT },
@@ -2608,15 +2691,19 @@ const s = StyleSheet.create({
 
   toggleRow:          { flexDirection:'row', gap:10 },
   toggleBtn:          { flex:1, paddingVertical:11, borderRadius:10, backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT, alignItems:'center' },
-  toggleBtnActive:    { backgroundColor:C.ORANGE, borderColor:C.ORANGE },
+  toggleBtnActive:    { backgroundColor:C.GOLD, borderColor:C.GOLD },
   toggleBtnText:      { color:C.TEXT_SUB, fontSize:13, fontWeight:'600' },
-  toggleBtnTextActive:{ color:'#fff' },
+  toggleBtnTextActive:{ color:C.GOLD_DARK },
 
   formBtnRow: { flexDirection:'row', gap:10, marginTop:28, marginBottom:16 },
   cancelBtn:  { flex:1, paddingVertical:15, borderRadius:12, backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT, alignItems:'center' },
   cancelBtnText:{ color:C.TEXT_SUB, fontSize:15, fontWeight:'600' },
-  saveBtn:    { flex:2, paddingVertical:15, borderRadius:12, backgroundColor:C.ORANGE, alignItems:'center' },
-  saveBtnText:{ color:'#fff', fontSize:15, fontWeight:'800' },
+  saveBtn: {
+    flex:2, paddingVertical:15, borderRadius:12, backgroundColor:C.GOLD, alignItems:'center',
+    shadowColor:C.GOLD, shadowOffset:{width:0,height:3},
+    shadowOpacity:0.5, shadowRadius:12, elevation:5,
+  },
+  saveBtnText:{ color:C.GOLD_DARK, fontSize:15, fontWeight:'800' },
 
   // ══ Shared scroll shell (InvestirView + MinhaCarteiraView) ═══════════════
   ivScroll:      { flex:1, backgroundColor:C.BG },
@@ -2646,10 +2733,10 @@ const s = StyleSheet.create({
   presetSwitchTab:  { flexDirection:'row', alignItems:'center', gap:6,
     paddingHorizontal:12, paddingVertical:8, borderRadius:10,
     backgroundColor:C.INPUT, borderWidth:1, borderColor:C.BORDER_LIGHT },
-  presetSwitchTabActive:  { backgroundColor:C.ORANGE_DIM, borderColor:C.ORANGE_BORDER },
+  presetSwitchTabActive:  { backgroundColor:C.GOLD_DIM, borderColor:C.GOLD_BORDER },
   presetSwitchIcon: { fontSize:14 },
   presetSwitchText: { color:C.TEXT_MUTED, fontSize:12, fontWeight:'600' },
-  presetSwitchTextActive: { color:C.ORANGE, fontWeight:'700' },
+  presetSwitchTextActive: { color:C.GOLD, fontWeight:'700' },
 
   // NoticiasView news card (full)
   newsCardFull:     { backgroundColor:C.CARD, borderRadius:14, overflow:'hidden',
@@ -2671,7 +2758,7 @@ const s = StyleSheet.create({
     marginBottom:36,
   },
   vtBannerLeft:    { flex:1, paddingRight:16 },
-  vtBannerTag:     { color:C.ORANGE, fontSize:10, fontWeight:'800', letterSpacing:1.4, marginBottom:10, textTransform:'uppercase' as any },
+  vtBannerTag:     { color:C.GOLD, fontSize:10, fontWeight:'800', letterSpacing:1.4, marginBottom:10, textTransform:'uppercase' as any },
   vtBannerTitle:   { color:C.TEXT, fontSize:20, fontWeight:'800', lineHeight:28, marginBottom:10 },
   vtBannerSub:     { color:C.TEXT_SUB, fontSize:13, lineHeight:20, marginBottom:22 },
   vtBannerBtn:     { alignSelf:'flex-start', paddingHorizontal:20, paddingVertical:12, borderRadius:10, backgroundColor:C.ORANGE },
